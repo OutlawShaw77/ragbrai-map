@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>RAGBRAI Routes 1973–2026</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/papaparse@5.4.1/papaparse.min.js"></script>
+<style>
+  body{margin:0;font-family:Segoe UI,Arial,sans-serif;display:flex;height:100vh}
+  #years{width:90px;overflow-y:auto;background:#1f3b57;padding:6px}
+  .yr{color:#fff;padding:4px 8px;margin:2px 0;border-radius:4px;cursor:pointer;font-size:14px}
+  .yr:hover{background:#3d6b94}.yr.locked{background:#f2b632;color:#000;font-weight:bold}
+  #map{flex:1}
+  #panel{width:280px;padding:14px;background:#f7f7f7;overflow-y:auto;border-left:1px solid #ccc}
+  #panel h2{margin:0 0 4px}#panel img{max-width:100%;margin-top:10px;border-radius:6px}
+  .stat{display:flex;justify-content:space-between;border-bottom:1px solid #ddd;padding:3px 0}
+  .ovLabel{font-size:15px;font-weight:bold;background:#fff;border:2px solid #c0392b}
+  .ptLabel{font-size:9px;padding:0 3px;background:rgba(255,255,255,.85);border:none;box-shadow:none}
+  .hint{color:#666;font-size:13px}
+</style>
+</head>
+<body>
+<div id="years"></div>
+<div id="map"></div>
+<div id="panel"><h2>RAGBRAI</h2><p class="hint">Hover over a year to preview its route.
+Click a year to keep it on screen, then hover over towns for their history.
+Click the year again to release it.</p></div>
+<script>
+const map = L.map('map').setView([42.0, -93.4], 7);
+L.tileLayer('https://{s}.basemap.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
+  {attribution:'&copy; OpenStreetMap &copy; CARTO'}).addTo(map);
+fetch('https://raw.githubusercontent.com/PublicaMundi/MappingAPI/master/data/geojson/us-states.json')
+  .then(r=>r.json()).then(g=>L.geoJSON(g.features.filter(f=>f.properties.name==='Iowa'),
+  {style:{color:'#1f3b57',weight:2,fill:false}}).addTo(map)).catch(()=>{});
+
+const num = v => v===undefined||v==='' ? null : Number(String(v).replace(/,/g,''));
+const load = f => new Promise(res=>Papa.parse(f,{download:true,header:true,skipEmptyLines:true,complete:r=>res(r.data)}));
+
+let stops={}, towns={}, rides={}, layer=null, locked=null;
+
+Promise.all([load('route_stops.csv'),load('towns.csv'),load('rides.csv')]).then(([rs,tw,rd])=>{
+  rs.forEach(r=>{ const y=r['Year']; (stops[y]=stops[y]||[]).push(r); });
+  Object.values(stops).forEach(a=>a.sort((a,b)=>num(a['Stop #'])-num(b['Stop #'])));
+  tw.forEach(t=>towns[t['Town']]=t);
+  rd.forEach(r=>rides[r['Year']]=r);
+  const box=document.getElementById('years');
+  Object.keys(stops).sort().forEach(y=>{
+    const d=document.createElement('div'); d.className='yr'; d.textContent=y;
+    d.onmouseenter=()=>{ if(!locked) draw(y,false); };
+    d.onmouseleave=()=>{ if(!locked) clearRoute(); };
+    d.onclick=()=>{
+      document.querySelectorAll('.yr').forEach(e=>e.classList.remove('locked'));
+      if(locked===y){ locked=null; clearRoute(); return; }
+      locked=y; d.classList.add('locked'); draw(y,true);
+    };
+    box.appendChild(d);
+  });
+});
+
+function clearRoute(){ if(layer){ map.removeLayer(layer); layer=null; } }
+
+function townInfo(name){
+  const t=towns[name]; if(!t) return `<b>${name}</b>`;
+  return `<b>${name}</b><br>
+    Overnight: ${t['Overnight Count']||0}${t['Overnight Years']?' ('+t['Overnight Years']+')':''}<br>
+    Pass-through: ${t['Pass-Through Count']||0}${t['Pass-Through Years']?' ('+t['Pass-Through Years']+')':''}<br>
+    First visit: ${t['First Year']} &middot; Most recent: ${t['Last Year']}`;
+}
+
+function draw(y, interactive){
+  clearRoute(); layer=L.layerGroup().addTo(map);
+  const pts=stops[y].filter(s=>num(s['Latitude'])!==null);
+  const line=pts.map(s=>[num(s['Latitude']),num(s['Longitude'])]);
+  L.polyline(line,{color:'#c0392b',weight:3,opacity:.75}).addTo(layer);
+  pts.forEach(s=>{
+    const big = s['Stop Type']!=='Pass-through';
+    const m=L.circleMarker([num(s['Latitude']),num(s['Longitude'])],{
+      radius:big?9:3, color:big?'#c0392b':'#1f3b57', fillColor:big?'#f2b632':'#1f3b57',
+      fillOpacity:1, weight:big?3:1}).addTo(layer);
+    m.bindTooltip(s['Map Town'],{permanent:true,direction:big?'top':'right',
+      className:big?'ovLabel':'ptLabel',offset:big?[0,-8]:[4,0]});
+    if(interactive){
+      m.bindPopup(townInfo(s['Map Town']));
+      m.on('mouseover',()=>m.openPopup()); m.on('mouseout',()=>m.closePopup());
+    }
+  });
+  map.fitBounds(L.latLngBounds(line),{padding:[30,30]});
+  showRide(y);
+}
+
+function showRide(y){
+  const r=rides[y]||{}, f=v=>v&&v!=='0'?v:'—';
+  document.getElementById('panel').innerHTML=`
+    <h2>${y} &middot; RAGBRAI ${f(r['Ride #'])}</h2>
+    ${r['Theme']?`<p><i>&ldquo;${r['Theme']}&rdquo;</i></p>`:''}
+    <div class="stat"><span>Route</span><span>${f(r['Starting Town'])} → ${f(r['Ending Town'])}</span></div>
+    <div class="stat"><span>Miles</span><span>${f(r['Miles'])}</span></div>
+    <div class="stat"><span>Feet of climb</span><span>${f(r['Feet of Climb'])}</span></div>
+    <div class="stat"><span>Riders</span><span>${f(r['Riders'])}</span></div>
+    <div class="stat"><span>Overnight stops</span><span>${f(r['Overnight Stops'])}</span></div>
+    <div class="stat"><span>Pass-through towns</span><span>${f(r['Pass-Through Towns'])}</span></div>
+    ${r['Logo / Image URL']?`<img src="${r['Logo / Image URL']}" alt="${y} logo">`:''}
+    ${r['Notes']?`<p class="hint">${r['Notes']}</p>`:''}
+    <p class="hint">${locked?'Hover over towns for their history.':'Click the year to keep this route on screen.'}</p>`;
+}
+</script>
+</body>
+</html>
