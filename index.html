@@ -27,7 +27,10 @@
 <div id="map"></div>
 <div id="panel"><h2>RAGBRAI</h2><p class="hint" id="status">Loading data…</p></div>
 <script>
-const map = L.map('map').setView([42.0, -93.4], 7);
+const IOWA = L.latLngBounds([40.30, -96.70], [43.60, -90.10]);
+const map = L.map('map', {zoomSnap: 0.25});
+map.fitBounds(IOWA);
+window.addEventListener('resize', () => map.fitBounds(IOWA));
 L.tileLayer('https://{s}.basemap.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
   {attribution:'&copy; OpenStreetMap &copy; CARTO'}).addTo(map);
 fetch('https://raw.githubusercontent.com/PublicaMundi/MappingAPI/master/data/geojson/us-states.json')
@@ -123,7 +126,6 @@ function draw(y, interactive){
 
   main.forEach(s=>addMarker(s, s['Stop Type']!=='Pass-through'?'big':'pt', interactive));
   all.filter(isLoop).forEach(s=>addMarker(s,'loop',interactive));
-  map.fitBounds(L.latLngBounds(all.map(ll)),{padding:[30,30]});
   showRide(y);
 }
 
