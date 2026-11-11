@@ -17,15 +17,15 @@
   .stat{display:flex;justify-content:space-between;border-bottom:1px solid #ddd;padding:3px 0}
   .ovLabel{font-size:15px;font-weight:bold;background:#fff;border:2px solid #c0392b}
   .ptLabel{font-size:9px;padding:0 3px;background:rgba(255,255,255,.85);border:none;box-shadow:none}
-  .hint{color:#666;font-size:13px}
+  .lpLabel{font-size:9px;font-style:italic;color:#d35400;padding:0 3px;background:rgba(255,255,255,.85);border:none;box-shadow:none}
+  .hint{color:#666;font-size:13px}.err{color:#b00020;font-weight:bold}
+  .legend{background:#fff;padding:6px 10px;font-size:12px;line-height:18px;border-radius:4px;box-shadow:0 0 4px rgba(0,0,0,.3)}
 </style>
 </head>
 <body>
 <div id="years"></div>
 <div id="map"></div>
-<div id="panel"><h2>RAGBRAI</h2><p class="hint">Hover over a year to preview its route.
-Click a year to keep it on screen, then hover over towns for their history.
-Click the year again to release it.</p></div>
+<div id="panel"><h2>RAGBRAI</h2><p class="hint" id="status">Loading data…</p></div>
 <script>
 const map = L.map('map').setView([42.0, -93.4], 7);
 L.tileLayer('https://{s}.basemap.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
@@ -33,19 +33,39 @@ L.tileLayer('https://{s}.basemap.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
 fetch('https://raw.githubusercontent.com/PublicaMundi/MappingAPI/master/data/geojson/us-states.json')
   .then(r=>r.json()).then(g=>L.geoJSON(g.features.filter(f=>f.properties.name==='Iowa'),
   {style:{color:'#1f3b57',weight:2,fill:false}}).addTo(map)).catch(()=>{});
+const legend=L.control({position:'bottomleft'});
+legend.onAdd=()=>{const d=L.DomUtil.create('div','legend');
+  d.innerHTML='<b style="color:#c0392b">━━</b> Main route<br><b style="color:#e67e22">╍╍</b> Loop (century, gravel…)<br>'+
+  '<span style="color:#f2b632">●</span> Overnight &nbsp;<span style="color:#1f3b57">•</span> Pass-through &nbsp;<span style="color:#e67e22">•</span> Loop town';return d;};
+legend.addTo(map);
 
-const num = v => v===undefined||v==='' ? null : Number(String(v).replace(/,/g,''));
-const load = f => new Promise(res=>Papa.parse(f,{download:true,header:true,skipEmptyLines:true,complete:r=>res(r.data)}));
+const status = msg => { const s=document.getElementById('status'); if(s) s.innerHTML = msg; };
+const num = v => v===undefined||v===null||String(v).trim()==='' ? null : Number(String(v).replace(/[,$\s]/g,''));
+const load = (f, optional) => fetch(f).then(r=>{
+    if(!r.ok){ if(optional) return ''; throw new Error(`Could not find <b>${f}</b> (error ${r.status}). Check the file name is exactly "${f}".`); }
+    return r.text();
+  }).then(t=>{
+    if(!t) return [];
+    const res = Papa.parse(t.replace(/^\uFEFF/,''),{header:true,skipEmptyLines:true,
+      transformHeader:h=>h.replace(/^\uFEFF/,'').trim()});
+    if(!res.data.length && !optional) throw new Error(`<b>${f}</b> loaded but has no rows.`);
+    return res.data;
+  });
 
-let stops={}, towns={}, rides={}, layer=null, locked=null;
+let stops={}, towns={}, rides={}, loops={}, layer=null, locked=null;
 
-Promise.all([load('route_stops.csv'),load('towns.csv'),load('rides.csv')]).then(([rs,tw,rd])=>{
-  rs.forEach(r=>{ const y=r['Year']; (stops[y]=stops[y]||[]).push(r); });
+Promise.all([load('route_stops.csv'),load('towns.csv'),load('rides.csv'),load('loops.csv',true)]).then(([rs,tw,rd,lp])=>{
+  if(!('Year' in rs[0]) || !('Map Town' in rs[0]))
+    throw new Error(`route_stops.csv headings not recognized. Found: ${Object.keys(rs[0]).join(' | ')}`);
+  rs.forEach(r=>{ const y=String(r['Year']).trim(); if(!/^\d{4}$/.test(y)) return; (stops[y]=stops[y]||[]).push(r); });
   Object.values(stops).forEach(a=>a.sort((a,b)=>num(a['Stop #'])-num(b['Stop #'])));
-  tw.forEach(t=>towns[t['Town']]=t);
-  rd.forEach(r=>rides[r['Year']]=r);
+  tw.forEach(t=>towns[String(t['Town']).trim()]=t);
+  rd.forEach(r=>rides[String(r['Year']).trim()]=r);
+  lp.forEach(l=>{ const y=String(l['Year']).trim(); (loops[y]=loops[y]||[]).push(l); });
+  const years=Object.keys(stops).sort();
+  if(!years.length) throw new Error('route_stops.csv loaded, but no 4-digit years were found in the Year column.');
   const box=document.getElementById('years');
-  Object.keys(stops).sort().forEach(y=>{
+  years.forEach(y=>{
     const d=document.createElement('div'); d.className='yr'; d.textContent=y;
     d.onmouseenter=()=>{ if(!locked) draw(y,false); };
     d.onmouseleave=()=>{ if(!locked) clearRoute(); };
@@ -56,7 +76,10 @@ Promise.all([load('route_stops.csv'),load('towns.csv'),load('rides.csv')]).then(
     };
     box.appendChild(d);
   });
-});
+  status(`Loaded ${years.length} rides, ${Object.keys(towns).length} towns, ${lp.length} loops.<br>
+    Hover over a year to preview its route. Click a year to keep it on screen, then hover over towns for their history.
+    Click the year again to release it.`);
+}).catch(e=>status(`<span class="err">${e.message}</span>`));
 
 function clearRoute(){ if(layer){ map.removeLayer(layer); layer=null; } }
 
@@ -67,30 +90,46 @@ function townInfo(name){
     Pass-through: ${t['Pass-Through Count']||0}${t['Pass-Through Years']?' ('+t['Pass-Through Years']+')':''}<br>
     First visit: ${t['First Year']} &middot; Most recent: ${t['Last Year']}`;
 }
+const ll = s => [num(s['Latitude']),num(s['Longitude'])];
+const hasLL = s => num(s['Latitude'])!==null && num(s['Longitude'])!==null;
+const townLL = name => { const t=towns[String(name||'').trim()]; return t && num(t['Latitude'])!==null ? [num(t['Latitude']),num(t['Longitude'])] : null; };
+
+function addMarker(s, kind, interactive){
+  const st={big:{radius:9,color:'#c0392b',fillColor:'#f2b632',weight:3},
+            pt:{radius:3,color:'#1f3b57',fillColor:'#1f3b57',weight:1},
+            loop:{radius:3,color:'#e67e22',fillColor:'#e67e22',weight:1}}[kind];
+  const m=L.circleMarker(ll(s),{...st,fillOpacity:1}).addTo(layer);
+  m.bindTooltip(s['Map Town'],{permanent:true,direction:kind==='big'?'top':'right',
+    className:kind==='big'?'ovLabel':kind==='loop'?'lpLabel':'ptLabel',offset:kind==='big'?[0,-8]:[4,0]});
+  if(interactive){ m.bindPopup(townInfo(s['Map Town']));
+    m.on('mouseover',()=>m.openPopup()); m.on('mouseout',()=>m.closePopup()); }
+}
 
 function draw(y, interactive){
   clearRoute(); layer=L.layerGroup().addTo(map);
-  const pts=stops[y].filter(s=>num(s['Latitude'])!==null);
-  const line=pts.map(s=>[num(s['Latitude']),num(s['Longitude'])]);
-  L.polyline(line,{color:'#c0392b',weight:3,opacity:.75}).addTo(layer);
-  pts.forEach(s=>{
-    const big = s['Stop Type']!=='Pass-through';
-    const m=L.circleMarker([num(s['Latitude']),num(s['Longitude'])],{
-      radius:big?9:3, color:big?'#c0392b':'#1f3b57', fillColor:big?'#f2b632':'#1f3b57',
-      fillOpacity:1, weight:big?3:1}).addTo(layer);
-    m.bindTooltip(s['Map Town'],{permanent:true,direction:big?'top':'right',
-      className:big?'ovLabel':'ptLabel',offset:big?[0,-8]:[4,0]});
-    if(interactive){
-      m.bindPopup(townInfo(s['Map Town']));
-      m.on('mouseover',()=>m.openPopup()); m.on('mouseout',()=>m.closePopup());
-    }
+  const all=stops[y].filter(hasLL);
+  if(!all.length){ status(`<span class="err">${y}: no stops have latitude/longitude.</span>`); return; }
+  const isLoop = s => String(s['Route Part']||'').trim()==='Loop';
+  const main=all.filter(s=>!isLoop(s));
+  L.polyline(main.map(ll),{color:'#c0392b',weight:3,opacity:.75}).addTo(layer);
+
+  // Loops: leave town -> loop towns -> rejoin town (dashed)
+  (loops[y]||[]).forEach(l=>{
+    const towns_=all.filter(s=>isLoop(s) && String(s['Loop #']).trim()===String(l['Loop #']).trim());
+    const path=[townLL(l['Leaves Route At']), ...towns_.map(ll), townLL(l['Rejoins Route At'])].filter(Boolean);
+    if(path.length>1) L.polyline(path,{color:'#e67e22',weight:3,dashArray:'6 6',opacity:.9})
+      .bindTooltip(`${l['Loop Type']} (Day ${l['Day #']})`,{sticky:true}).addTo(layer);
   });
-  map.fitBounds(L.latLngBounds(line),{padding:[30,30]});
+
+  main.forEach(s=>addMarker(s, s['Stop Type']!=='Pass-through'?'big':'pt', interactive));
+  all.filter(isLoop).forEach(s=>addMarker(s,'loop',interactive));
+  map.fitBounds(L.latLngBounds(all.map(ll)),{padding:[30,30]});
   showRide(y);
 }
 
 function showRide(y){
   const r=rides[y]||{}, f=v=>v&&v!=='0'?v:'—';
+  const lp=(loops[y]||[]).map(l=>`${l['Loop Type']}: ${l['Loop Towns (in order)']||''}`).join('<br>');
   document.getElementById('panel').innerHTML=`
     <h2>${y} &middot; RAGBRAI ${f(r['Ride #'])}</h2>
     ${r['Theme']?`<p><i>&ldquo;${r['Theme']}&rdquo;</i></p>`:''}
@@ -100,9 +139,11 @@ function showRide(y){
     <div class="stat"><span>Riders</span><span>${f(r['Riders'])}</span></div>
     <div class="stat"><span>Overnight stops</span><span>${f(r['Overnight Stops'])}</span></div>
     <div class="stat"><span>Pass-through towns</span><span>${f(r['Pass-Through Towns'])}</span></div>
+    ${lp?`<p class="hint"><b>Loops</b><br>${lp}</p>`:''}
     ${r['Logo / Image URL']?`<img src="${r['Logo / Image URL']}" alt="${y} logo">`:''}
     ${r['Notes']?`<p class="hint">${r['Notes']}</p>`:''}
-    <p class="hint">${locked?'Hover over towns for their history.':'Click the year to keep this route on screen.'}</p>`;
+    <p class="hint">${locked?'Hover over towns for their history.':'Click the year to keep this route on screen.'}</p>
+    <p class="hint" id="status"></p>`;
 }
 </script>
 </body>
