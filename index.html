@@ -204,7 +204,7 @@ async function upgradeRoads(y, main, loopLines, mainLine, token){
 
 async function getMain(y, main){
   if(roadCache[y]) return roadCache[y];
-  let res = GPX_YEARS.includes(y) ? await loadGpx(y) : null;
+   let res = await loadGpx(y);
   if(!res) res = {main: await getRoad(main.map(ll)), loops:null,
     src:'Lines follow today’s roads between towns (approximate, not necessarily the exact RAGBRAI roads).'};
   return roadCache[y]=res;
@@ -238,9 +238,10 @@ async function gpxPoints(url){
 }
 async function loadGpx(y){
   const days=[1,2,3,4,5,6,7];
-  const main=(await Promise.all(days.map(d=>gpxPoints(`tracks/${y}-day${d}.gpx`)))).filter(Boolean);
+  let main=(await Promise.all(days.map(d=>gpxPoints(`tracks/${y}-day${d}.gpx`)))).filter(Boolean);
+  if(!main.length){ const whole=await gpxPoints(`tracks/${y}.gpx`); if(whole) main=[whole]; }
   const lp=(await Promise.all(days.map(d=>gpxPoints(`tracks/${y}-day${d}-loop.gpx`)))).filter(Boolean);
-  return main.length ? {main, loops:lp, src:'Lines follow the official Ride with GPS route.'} : null;
+  return main.length ? {main, loops:lp, src:'Lines follow a GPS route file.'} : null;
 }
 
 function showRide(y){
