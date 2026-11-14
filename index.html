@@ -18,6 +18,7 @@
   #panel h2{margin:0 0 4px}#panel img{max-width:100%;margin-top:10px;border-radius:6px}
   #grab{display:none}
   .stat{display:flex;justify-content:space-between;gap:8px;border-bottom:1px solid #ddd;padding:3px 0}
+  .stat.rank{font-weight:bold;color:#1f3b57}
   .ovLabel{font-size:15px;font-weight:bold;background:#fff;border:2px solid #c0392b}
   .ptLabel{font-size:9px;padding:0 3px;background:rgba(255,255,255,.85);border:none;box-shadow:none}
   .lpLabel{font-size:9px;font-style:italic;color:#d35400;padding:0 3px;background:rgba(255,255,255,.85);border:none;box-shadow:none}
@@ -25,6 +26,9 @@
   .hint{color:#666;font-size:13px}.err{color:#b00020;font-weight:bold}
   .legend{background:#fff;padding:6px 10px;font-size:12px;line-height:18px;border-radius:4px;box-shadow:0 0 4px rgba(0,0,0,.3)}
   .reset{background:#fff;border:2px solid rgba(0,0,0,.2);border-radius:4px;padding:5px 8px;cursor:pointer;font-size:13px}
+  .sb{background:#fff;padding:6px;border-radius:4px;box-shadow:0 0 4px rgba(0,0,0,.3)}
+  .sb select,.sb input{display:block;box-sizing:border-box;width:210px;margin:3px 0;padding:5px;font-size:13px;border:1px solid #999;border-radius:3px;background:#fff}
+  .sb .hidden{display:none}
   @media (max-width:700px){
     body{flex-direction:column}
     #years{width:auto;display:flex;overflow-x:auto;overflow-y:hidden;white-space:nowrap;padding:4px;-webkit-overflow-scrolling:touch}
@@ -35,6 +39,8 @@
     #panel h2{font-size:18px}
     .ovLabel{font-size:12px;border-width:1px}
     .legend{font-size:10px;line-height:14px;padding:4px 6px}
+    .sb{padding:4px}
+    .sb select,.sb input{width:150px;font-size:16px;padding:3px}
   }
 </style>
 </head>
@@ -100,7 +106,35 @@ const load = (f, optional) => fetch(f).then(r=>{
   });
 
 let stops={}, towns={}, rides={}, loops={}, layer=null, locked=null, drawToken=0;
+let townMarkers={}, townLatest={};
 const roadCache={}, routeCache={};
+
+// ---------- Helpers for labels and ranks ----------
+const ordinal = n => { const s=['th','st','nd','rd'], v=n%100; return n+(s[(v-20)%10]||s[v]||s[0]); };
+const roman = n => {
+  const m=[[1000,'M'],[900,'CM'],[500,'D'],[400,'CD'],[100,'C'],[90,'XC'],[50,'L'],[40,'XL'],[10,'X'],[9,'IX'],[5,'V'],[4,'IV'],[1,'I']];
+  let s=''; for(const [v,r] of m){ while(n>=v){ s+=r; n-=v; } } return s;
+};
+// "2015-XLIII"
+const rideLabel = y => {
+  let n=String((rides[y]||{})['Ride #']||'').trim();
+  if(/^\d+$/.test(n)) n=roman(+n);
+  return n ? `${y}-${n}` : y;
+};
+// Rank 1 = most feet of climb / most miles. Ties are broken by year (earlier first).
+const ranks={}, order={climb:[],dist:[]};
+function computeRanks(){
+  [['climb','Feet of Climb'],['dist','Miles']].forEach(([k,col])=>{
+    const a=Object.keys(rides).filter(y=>num(rides[y][col])>0)
+      .sort((p,q)=>num(rides[q][col])-num(rides[p][col]) || p-q);
+    order[k]=a; a.forEach((y,i)=>{ (ranks[y]=ranks[y]||{})[k]=i+1; });
+  });
+}
+// Past the halfway point, count from the other end: 50th of 53 Longest = 4th Shortest
+function rankText(k, r, hi, lo){
+  const N=order[k].length;
+  return r>(N+1)/2 ? `${ordinal(N-r+1)} ${lo}` : `${ordinal(r)} ${hi}`;
+}
 
 Promise.all([load('route_stops.csv'),load('towns.csv'),load('rides.csv'),load('loops.csv',true)]).then(([rs,tw,rd,lp])=>{
   if(!('Year' in rs[0]) || !('Map Town' in rs[0]))
@@ -112,6 +146,9 @@ Promise.all([load('route_stops.csv'),load('towns.csv'),load('rides.csv'),load('l
   lp.forEach(l=>{ const y=String(l['Year']).trim(); (loops[y]=loops[y]||[]).push(l); });
   const years=Object.keys(stops).sort();
   if(!years.length) throw new Error('route_stops.csv loaded, but no 4-digit years were found in the Year column.');
+  computeRanks();
+  // Most recent year each town appears on a route (main route or loop)
+  years.forEach(y=>stops[y].forEach(s=>{ const n=String(s['Map Town']||'').trim(); if(n && hasLL(s)) townLatest[n]=y; }));
   const box=document.getElementById('years');
   years.forEach(y=>{
     const d=document.createElement('div'); d.className='yr'; d.textContent=y;
@@ -127,10 +164,74 @@ Promise.all([load('route_stops.csv'),load('towns.csv'),load('rides.csv'),load('l
     };
     box.appendChild(d);
   });
+  buildSearch(years);
   status(`Loaded ${years.length} rides, ${Object.keys(towns).length} towns, ${lp.length} loops.<br>` +
     (touch ? 'Tap a year to show its route, then tap towns for their history. Tap the year again to clear it.'
            : 'Hover over a year to preview its route. Click a year to keep it on screen, then hover over towns for their history. Click the year again to release it.'));
 }).catch(e=>status(`<span class="err">${e.message}</span>`));
+
+// ---------- Search ----------
+// Lock a year on screen (as if its button was clicked); optionally open one town's popup
+function selectYear(y, town){
+  locked=y;
+  let el=null;
+  document.querySelectorAll('.yr').forEach(e=>{ const on=e.textContent===y; e.classList.toggle('locked',on); if(on) el=e; });
+  draw(y,true);
+  if(el) el.scrollIntoView({inline:'center',block:'nearest',behavior:'smooth'});
+  if(town && townMarkers[town]){ map.panTo(townMarkers[town].getLatLng()); townMarkers[town].openPopup(); }
+}
+
+function buildSearch(years){
+  const ctl=L.control({position:'topright'});
+  ctl.onAdd=()=>{
+    const d=L.DomUtil.create('div','sb');
+    d.innerHTML=`
+      <select id="s1" aria-label="Search by">
+        <option value="">Search by…</option>
+        <option value="ride">YR-RAGBRAI NUM</option>
+        <option value="climb">Elevation Gain Rank</option>
+        <option value="dist">Distance Rank</option>
+        <option value="town">City/Town</option>
+      </select>
+      <select id="s2" class="hidden" aria-label="Choose"></select>
+      <input id="s3" class="hidden" list="townlist" placeholder="Type or pick a town…" autocomplete="off" aria-label="City or town">
+      <datalist id="townlist"></datalist>`;
+    L.DomEvent.disableClickPropagation(d); L.DomEvent.disableScrollPropagation(d);
+    return d;
+  };
+  ctl.addTo(map);
+
+  const s1=document.getElementById('s1'), s2=document.getElementById('s2'), s3=document.getElementById('s3');
+  const dl=document.getElementById('townlist');
+  Object.keys(townLatest).sort((a,b)=>a.localeCompare(b)).forEach(n=>{
+    const o=document.createElement('option'); o.value=n; dl.appendChild(o);
+  });
+  const fill=(placeholder, items)=>{
+    s2.innerHTML=`<option value="">${placeholder}</option>` +
+      items.map(([v,t])=>`<option value="${v}">${t}</option>`).join('');
+  };
+
+  s1.onchange=()=>{
+    const m=s1.value;
+    s2.classList.add('hidden'); s3.classList.add('hidden'); s3.value='';
+    if(m==='ride'){
+      fill('Choose a ride…', years.map(y=>[y, rideLabel(y)]));
+      s2.classList.remove('hidden');
+    } else if(m==='climb' || m==='dist'){
+      const hi = m==='climb' ? 'Hilliest' : 'Longest';
+      fill(`Choose a rank (1st = ${hi})…`, order[m].map((y,i)=>[y, `${ordinal(i+1)} ${hi} · ${y}`]));
+      s2.classList.remove('hidden');
+    } else if(m==='town'){
+      s3.classList.remove('hidden'); s3.focus();
+    }
+  };
+  s2.onchange=()=>{ if(s2.value) selectYear(s2.value); };
+  s3.onchange=()=>{
+    const n=s3.value.trim();
+    const key=Object.keys(townLatest).find(k=>k.toLowerCase()===n.toLowerCase());
+    if(key){ s3.value=key; selectYear(townLatest[key], key); }
+  };
+}
 
 function clearRoute(){ drawToken++; if(layer){ map.removeLayer(layer); layer=null; } }
 
@@ -150,6 +251,8 @@ function addMarker(s, kind, interactive){
             pt:{radius:3,color:'#1f3b57',fillColor:'#1f3b57',weight:1},
             loop:{radius:3,color:'#e67e22',fillColor:'#e67e22',weight:1}}[kind];
   const m=L.circleMarker(ll(s),{...st,fillOpacity:1}).addTo(layer);
+  const nm=String(s['Map Town']).trim();
+  if(!townMarkers[nm] || kind==='big') townMarkers[nm]=m;
   m.bindTooltip(s['Map Town'],{permanent:true,direction:kind==='big'?'top':'right',
     className:kind==='big'?'ovLabel':kind==='loop'?'lpLabel':'ptLabel',offset:kind==='big'?[0,-8]:[4,0]});
   if(interactive){
@@ -159,7 +262,7 @@ function addMarker(s, kind, interactive){
 }
 
 function draw(y, interactive){
-  clearRoute(); layer=L.layerGroup().addTo(map);
+  clearRoute(); layer=L.layerGroup().addTo(map); townMarkers={};
   const token=drawToken;
   const all=stops[y].filter(hasLL);
   if(!all.length){ status(`<span class="err">${y}: no stops have latitude/longitude.</span>`); return; }
@@ -247,12 +350,17 @@ async function loadGpx(y){
 function showRide(y){
   const r=rides[y]||{}, f=v=>v&&v!=='0'?v:'—';
   const lp=(loops[y]||[]).map(l=>`${l['Loop Type']}: ${l['Loop Towns (in order)']||''}`).join('<br>');
+  const rk=ranks[y]||{};
+  const rkHtml =
+    (rk.climb?`<div class="stat rank"><span>Elevation gain</span><span>${rankText('climb',rk.climb,'Hilliest','Flattest')}</span></div>`:'') +
+    (rk.dist?`<div class="stat rank"><span>Distance</span><span>${rankText('dist',rk.dist,'Longest','Shortest')}</span></div>`:'');
   document.getElementById('pbody').innerHTML=`
     <h2>${y} &middot; RAGBRAI ${f(r['Ride #'])}</h2>
     ${r['Theme']?`<p><i>&ldquo;${r['Theme']}&rdquo;</i></p>`:''}
     <div class="stat"><span>Route</span><span>${f(r['Starting Town'])} → ${f(r['Ending Town'])}</span></div>
     <div class="stat"><span>Miles</span><span>${f(r['Miles'])}</span></div>
     <div class="stat"><span>Feet of climb</span><span>${f(r['Feet of Climb'])}</span></div>
+    ${rkHtml}
     <div class="stat"><span>Riders</span><span>${f(r['Riders'])}</span></div>
     <div class="stat"><span>Overnight stops</span><span>${f(r['Overnight Stops'])}</span></div>
     <div class="stat"><span>Pass-through towns</span><span>${f(r['Pass-Through Towns'])}</span></div>
