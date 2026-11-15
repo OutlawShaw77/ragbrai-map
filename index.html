@@ -57,7 +57,8 @@
     <p>This map was built with help from these sites. Please visit them:</p>
     <ul>
       <li><a href="https://ragbrai.com/" target="_blank" rel="noopener">RAGBRAI.com</a> &ndash; the official RAGBRAI site</li>
-      <li><a href="https://drunkbrian.com/" target="_blank" rel="noopener">DrunkBrian.com</a> &ndash; route archives, logos and rider resources</li>
+      <li><a href="https://drunkbrian.com/" target="_blank" rel="noopener">DrunkBrian.com</a> &ndash; route archives and rider resources</li>
+      <li><a href="https://www.desmoinesregister.com/picture-gallery/life/living-well/ragbrai/2024/12/02/ragbrai-logos/75830282007/" target="_blank" rel="noopener">The Des Moines Register</a> &ndash; the RAGBRAI logo gallery</li>
       <li><a href="https://iowahighwayends.net/ragbraitowns.html" target="_blank" rel="noopener">Iowa Highway Ends</a> &ndash; the RAGBRAI towns list</li>
     </ul>
     <p>RAGBRAI names and logos belong to their respective owners.</p>
@@ -359,27 +360,32 @@ async function loadGpx(y){
   return main.length ? {main, loops:lp, src:'Lines follow a GPS route file.'} : null;
 }
 
-// Use the logo listed in rides.csv; otherwise fall back to DrunkBrian.com's logo archive (2014 onward)
+// Logos live in the repo's "Logos" folder as YYYY.png (1998-2026, no 2020).
+// Folder names are case-sensitive on GitHub Pages, so this must stay "Logos".
+// Years outside that range fall back to the URL in rides.csv, if any.
 function logoUrl(y){
-  const u=((rides[y]||{})['Logo / Image URL']||'').trim();
-  if(u) return u;
-  return +y>=2014 ? `https://drunkbrian.com/images/ragbrai_logos/${y}.png` : '';
+  if(+y>=1998 && +y<=2026 && +y!==2020) return `Logos/${y}.png`;
+  return ((rides[y]||{})['Logo / Image URL']||'').trim();
 }
 
 function showRide(y){
   const r=rides[y]||{}, f=v=>v&&v!=='0'?v:'—';
   const lp=(loops[y]||[]).map(l=>`${l['Loop Type']}: ${l['Loop Towns (in order)']||''}`).join('<br>');
   const rk=ranks[y]||{};
-  const rkHtml =
-    (rk.climb?`<div class="stat rank"><span>Elevation gain</span><span>${rankText('climb',rk.climb,'Hilliest','Flattest')}</span></div>`:'') +
-    (rk.dist?`<div class="stat rank"><span>Distance</span><span>${rankText('dist',rk.dist,'Longest','Shortest')}</span></div>`:'');
+  const mi=num(r['Miles']), ft=num(r['Feet of Climb']);
+  const fmt=n=>Math.round(n).toLocaleString('en-US');
+  const distTxt = mi>0 ? `${fmt(mi)} mi / ${fmt(mi*1.609344)} km` : '—';
+  const climbTxt = ft>0 ? `${fmt(ft)} ft / ${fmt(ft*0.3048)} m` : '—';
+  const distRank = rk.dist ? rankText('dist',rk.dist,'Longest','Shortest') : '—';
+  const climbRank = rk.climb ? rankText('climb',rk.climb,'Hilliest','Flattest') : '—';
   document.getElementById('pbody').innerHTML=`
     <h2>${y} &middot; RAGBRAI ${f(r['Ride #'])}</h2>
     ${r['Theme']?`<p><i>&ldquo;${r['Theme']}&rdquo;</i></p>`:''}
     <div class="stat"><span>Route</span><span>${f(r['Starting Town'])} → ${f(r['Ending Town'])}</span></div>
-    <div class="stat"><span>Miles</span><span>${f(r['Miles'])}</span></div>
-    <div class="stat"><span>Feet of climb</span><span>${f(r['Feet of Climb'])}</span></div>
-    ${rkHtml}
+    <div class="stat"><span>Distance</span><span>${distTxt}</span></div>
+    <div class="stat rank"><span>Distance Rank</span><span>${distRank}</span></div>
+    <div class="stat"><span>Elevation Gain</span><span>${climbTxt}</span></div>
+    <div class="stat rank"><span>Elevation Gain Rank</span><span>${climbRank}</span></div>
     <div class="stat"><span>Riders</span><span>${f(r['Riders'])}</span></div>
     <div class="stat"><span>Overnight stops</span><span>${f(r['Overnight Stops'])}</span></div>
     <div class="stat"><span>Pass-through towns</span><span>${f(r['Pass-Through Towns'])}</span></div>
