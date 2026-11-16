@@ -19,6 +19,8 @@
   #grab{display:none}
   .stat{display:flex;justify-content:space-between;gap:8px;border-bottom:1px solid #ddd;padding:3px 0}
   .stat.rank{font-weight:bold;color:#1f3b57}
+  .how{font-size:12px;color:#555;margin:4px 0 6px}.how summary{cursor:pointer;color:#1f3b57}
+  .how p{margin:4px 0;line-height:1.4}.how a{color:#1f3b57}
   #credits{margin-top:18px;padding-top:10px;border-top:2px solid #ccc;font-size:12px;color:#555;line-height:1.4}
   #credits p{margin:4px 0}#credits ul{margin:4px 0;padding-left:18px}#credits a{color:#1f3b57;font-weight:bold}
   .ovLabel{font-size:15px;font-weight:bold;background:#fff;border:2px solid #c0392b}
@@ -60,6 +62,7 @@
       <li><a href="https://drunkbrian.com/" target="_blank" rel="noopener">DrunkBrian.com</a> &ndash; route archives and rider resources</li>
       <li><a href="https://www.desmoinesregister.com/picture-gallery/life/living-well/ragbrai/2024/12/02/ragbrai-logos/75830282007/" target="_blank" rel="noopener">The Des Moines Register</a> &ndash; the RAGBRAI logo gallery</li>
       <li><a href="https://iowahighwayends.net/ragbraitowns.html" target="_blank" rel="noopener">Iowa Highway Ends</a> &ndash; the RAGBRAI towns list</li>
+      <li><a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo.com</a> &ndash; historical weather data (CC BY 4.0)</li>
     </ul>
     <p>RAGBRAI names and logos belong to their respective owners.</p>
   </div>
@@ -135,11 +138,14 @@ const rideLabel = y => {
   return n ? `${y}-${n}` : y;
 };
 // Rank 1 = most feet of climb / most miles. Ties are broken by year (earlier first).
-const ranks={}, order={climb:[],dist:[]};
+const ranks={}, order={climb:[],dist:[],temp:[]};
+const temps={};   // year -> average temperature (F) at the ending town, from temps.csv
 function computeRanks(){
-  [['climb','Feet of Climb'],['dist','Miles']].forEach(([k,col])=>{
-    const a=Object.keys(rides).filter(y=>num(rides[y][col])>0)
-      .sort((p,q)=>num(rides[q][col])-num(rides[p][col]) || p-q);
+  const val={climb:y=>num(rides[y]['Feet of Climb']), dist:y=>num(rides[y]['Miles']), temp:y=>temps[y]};
+  ['climb','dist','temp'].forEach(k=>{
+    const pool=k==='temp' ? Object.keys(temps) : Object.keys(rides);
+    const a=pool.filter(y=>val[k](y)!==null && (k==='temp' || val[k](y)>0))
+      .sort((p,q)=>val[k](q)-val[k](p) || p-q);
     order[k]=a; a.forEach((y,i)=>{ (ranks[y]=ranks[y]||{})[k]=i+1; });
   });
 }
@@ -149,7 +155,7 @@ function rankText(k, r, hi, lo){
   return r>(N+1)/2 ? `${ordinal(N-r+1)} ${lo}` : `${ordinal(r)} ${hi}`;
 }
 
-Promise.all([load('route_stops.csv'),load('towns.csv'),load('rides.csv'),load('loops.csv',true)]).then(([rs,tw,rd,lp])=>{
+Promise.all([load('route_stops.csv'),load('towns.csv'),load('rides.csv'),load('loops.csv',true),load('temps.csv',true)]).then(([rs,tw,rd,lp,tp])=>{
   if(!('Year' in rs[0]) || !('Map Town' in rs[0]))
     throw new Error(`route_stops.csv headings not recognized. Found: ${Object.keys(rs[0]).join(' | ')}`);
   rs.forEach(r=>{ const y=String(r['Year']).trim(); if(!/^\d{4}$/.test(y)) return; (stops[y]=stops[y]||[]).push(r); });
@@ -159,6 +165,7 @@ Promise.all([load('route_stops.csv'),load('towns.csv'),load('rides.csv'),load('l
   lp.forEach(l=>{ const y=String(l['Year']).trim(); (loops[y]=loops[y]||[]).push(l); });
   const years=Object.keys(stops).sort();
   if(!years.length) throw new Error('route_stops.csv loaded, but no 4-digit years were found in the Year column.');
+  tp.forEach(t=>{ const v=num(t['Avg Temp F']); if(v!==null) temps[String(t['Year']).trim()]=v; });
   computeRanks();
   // Most recent year each town appears on a route (main route or loop)
   years.forEach(y=>stops[y].forEach(s=>{ const n=String(s['Map Town']||'').trim(); if(n && hasLL(s)) townLatest[n]=y; }));
@@ -204,6 +211,7 @@ function buildSearch(years){
         <option value="ride">YR-RAGBRAI NUM</option>
         <option value="climb">Elevation Gain Rank</option>
         <option value="dist">Distance Rank</option>
+        ${order.temp.length?'<option value="temp">Average Temp Rank</option>':''}
         <option value="town">City/Town</option>
       </select>
       <select id="s2" class="hidden" aria-label="Choose"></select>
@@ -230,9 +238,10 @@ function buildSearch(years){
     if(m==='ride'){
       fill('Choose a ride…', years.map(y=>[y, rideLabel(y)]));
       s2.classList.remove('hidden');
-    } else if(m==='climb' || m==='dist'){
-      const hi = m==='climb' ? 'Hilliest' : 'Longest';
-      fill(`Choose a rank (1st = ${hi})…`, order[m].map((y,i)=>[y, `${ordinal(i+1)} ${hi} · ${y}`]));
+    } else if(m==='climb' || m==='dist' || m==='temp'){
+      const hi = {climb:'Hilliest', dist:'Longest', temp:'Hottest'}[m];
+      fill(`Choose a rank (1st = ${hi})…`, order[m].map((y,i)=>
+        [y, `${ordinal(i+1)} ${hi} · ${y}` + (m==='temp' ? ` (${temps[y].toFixed(1)}°F)` : '')]));
       s2.classList.remove('hidden');
     } else if(m==='town'){
       s3.classList.remove('hidden'); s3.focus();
@@ -378,6 +387,23 @@ function showRide(y){
   const climbTxt = ft>0 ? `${fmt(ft)} ft / ${fmt(ft*0.3048)} m` : '—';
   const distRank = rk.dist ? rankText('dist',rk.dist,'Longest','Shortest') : '—';
   const climbRank = rk.climb ? rankText('climb',rk.climb,'Hilliest','Flattest') : '—';
+  const tF=temps[y];
+  const tempTxt = tF!==undefined ? `${tF.toFixed(1)}°F / ${((tF-32)*5/9).toFixed(1)}°C` : '—';
+  const tempRank = rk.temp ? rankText('temp',rk.temp,'Hottest','Coolest') : '—';
+  const tempRows = Object.keys(temps).length ? `
+    <div class="stat"><span>Average Temp</span><span>${tempTxt}</span></div>
+    <div class="stat rank"><span>Average Temp Rank</span><span>${tempRank}</span></div>
+    <details class="how"><summary>How is Average Temp calculated?</summary>
+      <p>For each day of the ride, we took that day's average temperature (the mean of the hourly
+      temperatures from midnight to midnight, Iowa time) at the town where riders finished the day.
+      Those daily averages were then averaged across the ride's days: usually seven, Sunday through
+      Saturday (six in 1973).</p>
+      <p>The temperatures are modeled historical weather for each town's location, from
+      <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo.com</a>, not
+      weather station readings. They are good for comparing years, but may differ a little from
+      official records or what riders felt. Rank 1 is the hottest week; ranks past the halfway
+      point count up from the coolest.</p>
+    </details>` : '';
   document.getElementById('pbody').innerHTML=`
     <h2>${y} &middot; RAGBRAI ${f(r['Ride #'])}</h2>
     ${r['Theme']?`<p><i>&ldquo;${r['Theme']}&rdquo;</i></p>`:''}
@@ -385,7 +411,7 @@ function showRide(y){
     <div class="stat"><span>Distance</span><span>${distTxt}</span></div>
     <div class="stat rank"><span>Distance Rank</span><span>${distRank}</span></div>
     <div class="stat"><span>Elevation Gain</span><span>${climbTxt}</span></div>
-    <div class="stat rank"><span>Elevation Gain Rank</span><span>${climbRank}</span></div>
+    <div class="stat rank"><span>Elevation Gain Rank</span><span>${climbRank}</span></div>${tempRows}
     <div class="stat"><span>Riders</span><span>${f(r['Riders'])}</span></div>
     <div class="stat"><span>Overnight stops</span><span>${f(r['Overnight Stops'])}</span></div>
     <div class="stat"><span>Pass-through towns</span><span>${f(r['Pass-Through Towns'])}</span></div>
