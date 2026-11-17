@@ -3,7 +3,18 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>RAGBRAI Routes 1973–2026</title>
+<title>Maps of RAGBRAI – Every RAGBRAI Route 1973–2026</title>
+<meta name="description" content="Explore every RAGBRAI route since 1973 on an interactive map of Iowa. Browse by year, hilliest, longest or hottest ride, or by town, and see each day's route and temperature.">
+<link rel="canonical" href="https://mapsofragbrai.com/">
+<link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
+<link rel="icon" type="image/png" sizes="192x192" href="favicon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Maps of RAGBRAI – Every RAGBRAI Route 1973–2026">
+<meta property="og:description" content="Interactive map of every RAGBRAI route, with distance, elevation gain, temperature and town history.">
+<meta property="og:url" content="https://mapsofragbrai.com/">
+<meta property="og:image" content="https://mapsofragbrai.com/social-preview.png">
+<meta name="twitter:card" content="summary_large_image">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://unpkg.com/papaparse@5.4.1/papaparse.min.js"></script>
@@ -22,6 +33,7 @@
   .yr:hover{background:#3d6b94}.yr.on{background:#f2b632;color:#000;font-weight:bold}
   #map{flex:1;min-width:0;min-height:0}
   #panel{width:280px;padding:14px;background:#f7f7f7;overflow-y:auto;border-left:1px solid #ccc;flex:none}
+  #panel .welcome-logo{display:block;width:100%;max-width:240px;margin:4px auto 12px;border-radius:0}
   #panel h2{margin:0 0 4px}#panel img{max-width:100%;margin-top:10px;border-radius:6px}
   #grab{display:none}
   .stat{display:flex;justify-content:space-between;gap:8px;border-bottom:1px solid #ddd;padding:3px 0}
@@ -50,6 +62,7 @@
     #panel.collapsed{max-height:38px;overflow:hidden}
     #grab{display:block;text-align:center;font-size:13px;color:#1f3b57;padding:8px 0;cursor:pointer;font-weight:bold}
     #panel h2{font-size:18px}
+    #panel .welcome-logo{max-width:110px;margin:6px auto 8px}
     .ovLabel{font-size:12px;border-width:1px}
   }
 </style>
@@ -59,7 +72,7 @@
 <div id="map"></div>
 <div id="panel">
   <div id="grab">Ride details ▾</div>
-  <div id="pbody"><h2>RAGBRAI</h2><p class="hint" id="status">Loading data…</p></div>
+  <div id="pbody"><img class="welcome-logo" src="logo.png" alt="Maps of RAGBRAI logo" onerror="this.remove()"><p class="hint" id="status">Loading data…</p></div>
   <div id="credits">
     <b>Thank you</b>
     <p>This map was built with help from these sites. Please visit them:</p>
@@ -290,7 +303,7 @@ function selectDay(y,n){
 }
 function backToList(){
   locked=null; activeDay=0; clearRoute(); renderRibbon();
-  document.getElementById('pbody').innerHTML='<h2>RAGBRAI</h2><p class="hint" id="status"></p>';
+  document.getElementById('pbody').innerHTML='<img class="welcome-logo" src="logo.png" alt="Maps of RAGBRAI logo" onerror="this.remove()"><p class="hint" id="status"></p>';
   status(introText);
   map.fitBounds(IOWA);
 }
