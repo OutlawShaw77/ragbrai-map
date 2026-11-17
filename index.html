@@ -157,7 +157,7 @@ const load = (f, optional) => fetch(f).then(r=>{
 
 let stops={}, towns={}, rides={}, loops={}, layer=null, locked=null, drawToken=0;
 let townMarkers={}, townLatest={};
-const roadCache={}, routeCache={};
+const roadCache={}, routeCache={}, roadFail={};
 
 // ---------- Helpers for labels and ranks ----------
 const ordinal = n => { const s=['th','st','nd','rd'], v=n%100; return n+(s[(v-20)%10]||s[v]||s[0]); };
@@ -375,51 +375,87 @@ async function upgradeRoads(y, main, loopLines, mainLine, token){
       for(const o of loopLines){ const g=await getRoad(o.path); if(token!==drawToken) return; o.line.setLatLngs(g); }
     }
     roadNote(r.src);
+    updateDayDist(y);
   }catch(e){
+    roadFail[y]=true; updateDayDist(y);
     if(token===drawToken) roadNote('Road lines unavailable right now – showing straight lines between towns.');
   }
 }
 
 async function getMain(y, main){
   if(roadCache[y]) return roadCache[y];
-   let res = await loadGpx(y);
-  if(!res) res = {main: await getRoad(main.map(ll)), loops:null,
-    src:'Lines follow today’s roads between towns (approximate, not necessarily the exact RAGBRAI roads).'};
+  let res = await loadGpx(y);
+  if(!res){
+    const rr = await getRoadFull(main.map(ll));
+    // Each leg ends at one stop; credit it to that stop's day
+    const dayMi={};
+    main.forEach((st,i)=>{ if(i>0 && rr.legs[i-1]>0){ const d=dayNo(st); dayMi[d]=(dayMi[d]||0)+rr.legs[i-1]/1609.344; } });
+    res = {main: rr.coords, loops:null, dayMi, distSrc:'roads',
+      src:'Lines follow today’s roads between towns (approximate, not necessarily the exact RAGBRAI roads).'};
+  }
   return roadCache[y]=res;
 }
 
-// Ask the bike router for roads through a list of points (in chunks of 25)
-async function getRoad(points){
+// Ask the bike router for roads through a list of points (in chunks of 25). Returns the line and each leg's length in metres
+async function getRoadFull(points){
   const key=points.map(p=>p.join(',')).join(';');
   if(routeCache[key]) return routeCache[key];
-  let out=[];
+  let coords=[], legs=[];
   for(let i=0;i<points.length-1;i+=24){
     const chunk=points.slice(i,i+25);
-    const coords=chunk.map(p=>p[1].toFixed(5)+','+p[0].toFixed(5)).join(';');
-    const r=await fetch(`${ROUTER}/${coords}?overview=full&geometries=geojson`);
+    const cs=chunk.map(p=>p[1].toFixed(5)+','+p[0].toFixed(5)).join(';');
+    const r=await fetch(`${ROUTER}/${cs}?overview=full&geometries=geojson`);
     if(!r.ok) throw new Error('router '+r.status);
     const j=await r.json(); if(j.code!=='Ok') throw new Error(j.code);
-    out=out.concat(j.routes[0].geometry.coordinates.map(c=>[c[1],c[0]]));
+    coords=coords.concat(j.routes[0].geometry.coordinates.map(c=>[c[1],c[0]]));
+    legs=legs.concat(j.routes[0].legs.map(l=>l.distance));
   }
-  return routeCache[key]=out;
+  return routeCache[key]={coords,legs};
 }
+const getRoad = async points => (await getRoadFull(points)).coords;
 
 // Read Ride with GPS files: tracks/YEAR-dayN.gpx and tracks/YEAR-dayN-loop.gpx
+// Returns the (thinned) line for drawing plus the full-detail length in miles
+const hav=(a,b)=>{ const t=Math.PI/180, dLa=(b[0]-a[0])*t, dLo=(b[1]-a[1])*t,
+  x=Math.sin(dLa/2)**2+Math.cos(a[0]*t)*Math.cos(b[0]*t)*Math.sin(dLo/2)**2; return 2*6371008.8*Math.asin(Math.sqrt(x)); };
 async function gpxPoints(url){
   try{
     const r=await fetch(url); if(!r.ok) return null;
     const x=new DOMParser().parseFromString(await r.text(),'application/xml');
     let pts=[...x.getElementsByTagName('trkpt')]; if(!pts.length) pts=[...x.getElementsByTagName('rtept')];
     const a=pts.map(p=>[+p.getAttribute('lat'),+p.getAttribute('lon')]);
-    return a.length ? a.filter((_,i)=>i%4===0||i===a.length-1) : null;
+    if(!a.length) return null;
+    let m=0; for(let i=1;i<a.length;i++) m+=hav(a[i-1],a[i]);
+    return {pts: a.filter((_,i)=>i%4===0||i===a.length-1), mi: m/1609.344};
   }catch(e){ return null; }
 }
 async function loadGpx(y){
   const days=[1,2,3,4,5,6,7];
-  let main=(await Promise.all(days.map(d=>gpxPoints(`tracks/${y}-day${d}.gpx`)))).filter(Boolean);
-  if(!main.length){ const whole=await gpxPoints(`tracks/${y}.gpx`); if(whole) main=[whole]; }
-  const lp=(await Promise.all(days.map(d=>gpxPoints(`tracks/${y}-day${d}-loop.gpx`)))).filter(Boolean);
-  return main.length ? {main, loops:lp, src:'Lines follow a GPS route file.'} : null;
+  const got=await Promise.all(days.map(d=>gpxPoints(`tracks/${y}-day${d}.gpx`)));
+  let main=got.filter(Boolean).map(g=>g.pts);
+  const dayMi={}; got.forEach((g,i)=>{ if(g) dayMi[i+1]=g.mi; });   // file dayN = ride Day N
+  if(!main.length){ const whole=await gpxPoints(`tracks/${y}.gpx`); if(whole) main=[whole.pts]; }
+  const lp=(await Promise.all(days.map(d=>gpxPoints(`tracks/${y}-day${d}-loop.gpx`)))).filter(Boolean).map(g=>g.pts);
+  return main.length ? {main, loops:lp, dayMi, distSrc:'gps', src:'Lines follow a GPS route file.'} : null;
+}
+
+// The day's distance for the sidebar (filled in once the route lines have loaded)
+function dayDistHtml(y,n){
+  const r=roadCache[y]; let val, note='';
+  if(r){
+    const mi=(r.dayMi||{})[n];
+    if(mi>0){
+      const est=r.distSrc==='roads';
+      val=`${est?'≈ ':''}${mi.toFixed(1)} mi / ${(mi*1.609344).toFixed(1)} km`;
+      note = est ? 'Estimated from today’s roads between towns; the actual route and official mileage may differ.'
+                 : 'Measured from the GPS route file. Optional loops are not included.';
+    } else val='—';
+  } else val = roadFail[y] ? 'unavailable' : 'calculating…';
+  return `<div class="stat rank"><span>Distance</span><span>${val}</span></div>` + (note?`<p class="hint">${note}</p>`:'');
+}
+function updateDayDist(y){
+  const el=document.getElementById('daydist');
+  if(el && locked===y && activeDay>0) el.innerHTML=dayDistHtml(y,activeDay);
 }
 
 const RIDE_START={1973:'1973-08-26',1974:'1974-08-04',1975:'1975-08-03',1976:'1976-08-01',1977:'1977-07-31',1978:'1978-07-30',1979:'1979-07-29',1980:'1980-07-27',1981:'1981-07-26',1982:'1982-07-25',1983:'1983-07-24',1984:'1984-07-22',1985:'1985-07-21',1986:'1986-07-20',1987:'1987-07-19',1988:'1988-07-24',1989:'1989-07-23',1990:'1990-07-22',1991:'1991-07-21',1992:'1992-07-19',1993:'1993-07-25',1994:'1994-07-24',1995:'1995-07-23',1996:'1996-07-21',1997:'1997-07-20',1998:'1998-07-19',1999:'1999-07-25',2000:'2000-07-23',2001:'2001-07-22',2002:'2002-07-21',2003:'2003-07-20',2004:'2004-07-25',2005:'2005-07-24',2006:'2006-07-23',2007:'2007-07-22',2008:'2008-07-20',2009:'2009-07-19',2010:'2010-07-25',2011:'2011-07-24',2012:'2012-07-22',2013:'2013-07-21',2014:'2014-07-20',2015:'2015-07-19',2016:'2016-07-24',2017:'2017-07-23',2018:'2018-07-22',2019:'2019-07-21',2021:'2021-07-25',2022:'2022-07-24',2023:'2023-07-23',2024:'2024-07-21',2025:'2025-07-20',2026:'2026-07-19'};
@@ -475,7 +511,8 @@ function showRide(y){
     const when=[i.name, dt?`${MONTHS[dt.getUTCMonth()]} ${dt.getUTCDate()}`:''].filter(Boolean).join(', ');
     const F=v=>`${v.toFixed(1)}°F / ${((v-32)*5/9).toFixed(1)}°C`;
     dayBox=`<div class="daybox"><b>Day ${activeDay}</b> &middot; ${when}
-      <div class="stat"><span>Route</span><span>${i.from||'—'} → ${i.to||'—'}</span></div>` +
+      <div class="stat"><span>Route</span><span>${i.from||'—'} → ${i.to||'—'}</span></div>
+      <div id="daydist">${dayDistHtml(y,activeDay)}</div>` +
       (t ? `<div class="stat rank"><span>Day's Avg Temp</span><span>${F(t.mean)}</span></div>` +
            (t.high!==null&&t.low!==null ? `<div class="stat"><span>High / Low</span><span>${Math.round(t.high)}°F / ${Math.round(t.low)}°F</span></div>` : '') +
            `<p class="hint">Modeled weather for ${t.town}, where riders finished the day.</p>`
