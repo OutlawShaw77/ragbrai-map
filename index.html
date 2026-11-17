@@ -195,7 +195,7 @@ Promise.all([load('route_stops.csv'),load('towns.csv'),load('rides.csv'),load('l
   buildSearch(years);
   status(`Loaded ${years.length} rides, ${Object.keys(towns).length} towns, ${lp.length} loops.<br>` +
     (touch ? 'Tap a year to show its route, then tap towns for their history. Tap the year again to clear it.'
-           : 'Hover over a year to preview its route. Click a year to keep it on screen, then hover over towns for their history. Click the year again to release it.'));
+           : 'Select a year to view the RAGBRAI route for that year, or search by RAGBRAI Number, Longest RAGBRAI, Hilliest RAGBRAI, Hottest RAGBRAI, or by RAGBRAI towns.'));
 }).catch(e=>status(`<span class="err">${e.message}</span>`));
 
 // ---------- Search ----------
