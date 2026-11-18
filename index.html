@@ -506,6 +506,7 @@ function dayDistHtml(y,n){
     if(s.ft>0){
       h+=`<div class="stat rank"><span>Elevation Gain</span><span>${s.elevSrc==='GPX'?'':'≈ '}${fmtN(s.ft)} ft / ${fmtN(s.ft*0.3048)} m</span></div>`;
       notes.push(ELEV_NOTE[s.elevSrc]);
+      h+=`<div class="stat rank"><span>Feet per Mile</span><span>${s.elevSrc==='GPX'?'':'≈ '}${(s.ft/s.mi).toFixed(1)}</span></div>`;
     }
     notes.push('Official figures may differ. Optional loops are not included.');
     return h+`<p class="hint">${notes.filter(Boolean).join(' ')}</p>`;
