@@ -49,6 +49,12 @@
   .ptLabel{font-size:var(--ptfont,9px);padding:0 3px;background:rgba(255,255,255,.85);border:none;box-shadow:none}
   .lpLabel{font-size:var(--ptfont,9px);font-style:italic;color:#d35400;padding:0 3px;background:rgba(255,255,255,.85);border:none;box-shadow:none}
   .hideSmall .ptLabel,.hideSmall .lpLabel{display:none}
+  /* Soft Iowa backdrop: faint towns and roads under the route */
+  .plWrap{background:none;border:none}
+  .pl{position:absolute;left:0;top:0;white-space:nowrap;transform:translate(6px,-50%);color:#4d5d6e;opacity:.62;
+      text-shadow:0 0 3px #fff,0 0 3px #fff,0 0 2px #fff;pointer-events:none}
+  .pl i{position:absolute;left:-10px;top:50%;width:5px;height:5px;margin-top:-2.5px;border-radius:50%;background:#6f7f90}
+  .softOff .plWrap{display:none}
   .hint{color:#666;font-size:13px}.err{color:#b00020;font-weight:bold}
   .reset{background:#fff;border:2px solid rgba(0,0,0,.2);border-radius:4px;padding:5px 8px;cursor:pointer;font-size:13px}
   @media (max-width:700px){
@@ -100,7 +106,7 @@ const IOWA = L.latLngBounds([40.30, -96.70], [43.60, -90.10]);
 const map = L.map('map', {zoomSnap: 0.25});
 map.fitBounds(IOWA);
 window.addEventListener('resize', () => map.invalidateSize());
-L.tileLayer('https://{s}.basemap.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
+const baseTiles=L.tileLayer('https://{s}.basemap.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
   {attribution:'&copy; OpenStreetMap &copy; CARTO'}).addTo(map);
 fetch('https://raw.githubusercontent.com/PublicaMundi/MappingAPI/master/data/geojson/us-states.json')
   .then(r=>r.json()).then(g=>L.geoJSON(g.features.filter(f=>f.properties.name==='Iowa'),
@@ -133,6 +139,68 @@ function fitDay(y,n,animate=true){
 // Hide small labels on phones until zoomed in
 function labelDensity(){ map.getContainer().classList.toggle('hideSmall', narrow() && map.getZoom() < 9); }
 map.on('zoomend', labelDensity); labelDensity();
+
+// ---------- Soft backdrop: faint Iowa towns (sized by population) and major roads ----------
+// Files (both optional): places.csv (Name, Latitude, Longitude, Population) and roads.geojson
+// (features with property c = "I" interstate, "U" US highway, "S" other primary road).
+const SOFT_POP = [   // [minimum population, first zoom shown, label size px]
+  [40000, 6,    15],
+  [15000, 7,    13],
+  [ 5000, 8,    12],
+  [ 1500, 9,    11],
+  [  500, 10, 10.5],
+  [    0, 11,   10]];
+const softPane = map.createPane('soft'); softPane.style.zIndex = 350; softPane.style.pointerEvents = 'none';
+let softPlaces = [], softRoadLayers = null, softLabels = null, routeNames = new Set();
+const normName = n => String(n||'').toLowerCase().replace(/\s+(city|town)$/,'').replace(/\./g,'').trim();
+function popBucket(pop){ for(const b of SOFT_POP) if(pop>=b[0]) return b; return SOFT_POP[SOFT_POP.length-1]; }
+const softZoomAdj = () => narrow() ? 0.5 : 0;     // phones show slightly fewer labels at the same zoom
+function roadStyle(c, z){
+  const w = c==='I' ? (z<8?1.8:z<10?2.6:3.6) : c==='U' ? (z<9?1.2:z<11?2:2.8) : (z<11?1.1:1.8);
+  return {color: c==='I'?'#7d8da1':c==='U'?'#8d9aab':'#a0abb9', weight:w, opacity: c==='I'?.5:c==='U'?.42:.34,
+          pane:'soft', interactive:false, lineCap:'round', lineJoin:'round'};
+}
+function updateSoftRoads(){
+  if(!softRoadLayers) return; const z=map.getZoom();
+  const minZ={I:0,U:7,S:9.5};
+  Object.keys(softRoadLayers).forEach(c=>{
+    const lyr=softRoadLayers[c], on = z>=minZ[c];
+    if(on){ lyr.setStyle(roadStyle(c,z)); if(!map.hasLayer(lyr)) lyr.addTo(map); }
+    else if(map.hasLayer(lyr)) map.removeLayer(lyr);
+  });
+}
+// Which towns get a label at this zoom, biggest first, skipping any that would overlap one already placed
+function pickSoftLabels(z, project, size, bounds){
+  const out=[], boxes=[];
+  const cand=softPlaces.filter(p=>{
+    const b=popBucket(p.pop); return z >= b[1]+softZoomAdj() && !routeNames.has(p.key) && bounds(p);
+  }).sort((a,b)=>b.pop-a.pop);
+  for(const p of cand){
+    const b=popBucket(p.pop), px=project(p), w=p.name.length*b[2]*0.56+12, h=b[2]+3;
+    const box=[px.x-6, px.y-h/2, px.x+w, px.y+h/2];
+    if(boxes.some(o=>box[0]<o[2]&&box[2]>o[0]&&box[1]<o[3]&&box[3]>o[1])) continue;
+    boxes.push(box); out.push({p,size:b[2]});
+    if(out.length>=350) break;
+  }
+  return out;
+}
+function updateSoftPlaces(){
+  if(!softPlaces.length) return;
+  if(softLabels) map.removeLayer(softLabels);
+  softLabels = L.layerGroup();
+  const bb=map.getBounds().pad(0.1);
+  const picks=pickSoftLabels(map.getZoom(), p=>map.latLngToContainerPoint([p.lat,p.lon]), size=>0,
+                             p=>bb.contains([p.lat,p.lon]));
+  picks.forEach(({p,size})=>{
+    L.marker([p.lat,p.lon],{pane:'soft',interactive:false,keyboard:false,
+      icon:L.divIcon({className:'plWrap',iconSize:[0,0],
+        html:`<span class="pl" style="font-size:${size}px"><i></i>${p.name}</span>`})}).addTo(softLabels);
+  });
+  softLabels.addTo(map);
+}
+function updateSoft(){ updateSoftRoads(); updateSoftPlaces(); }
+function setRouteNames(list){ routeNames=new Set(list.map(normName)); updateSoftPlaces(); }
+map.on('zoomend moveend', updateSoft);
 
 // Collapsible details panel on phones
 document.getElementById('grab').onclick=()=>{
@@ -177,6 +245,24 @@ const ranks={}, order={climb:[],dist:[],temp:[]};
 const via={};     // year -> day # -> [[lat,lon],...]: the general route taken from GPX files (route_via.csv)
 const dailyS={};  // year -> day # -> {mi, ft, distSrc, elevSrc} (daily_stats.csv)
 const dailyT={};  // year -> day # -> {mean, high, low, town}, from daily_temps.csv
+
+// Optional soft backdrop files; the page works fine without them
+load('places.csv',true).then(rows=>{
+  softPlaces = rows.map(r=>({name:String(r['Name']||'').trim(), key:normName(r['Name']),
+      lat:num(r['Latitude']), lon:num(r['Longitude']), pop:num(r['Population'])||0}))
+    .filter(p=>p.name && p.lat!==null && p.lon!==null);
+  if(softPlaces.length) baseTiles.setUrl('https://{s}.basemap.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png');  // our own labels replace the map's
+  updateSoftPlaces();
+}).catch(()=>{});
+fetch('roads.geojson').then(r=>r.ok?r.json():null).then(g=>{
+  if(!g||!g.features) return;
+  softRoadLayers={};
+  ['I','U','S'].forEach(c=>{
+    softRoadLayers[c]=L.geoJSON({type:'FeatureCollection',features:g.features.filter(f=>f.properties&&f.properties.c===c)},
+      {style:()=>roadStyle(c,map.getZoom()),pane:'soft',interactive:false});
+  });
+  updateSoftRoads();
+}).catch(()=>{});
 const temps={};   // year -> average temperature (F) at the ending town, from temps.csv
 function computeRanks(){
   const val={climb:y=>num(rides[y]['Feet of Climb']), dist:y=>num(rides[y]['Miles']), temp:y=>temps[y]};
@@ -319,7 +405,7 @@ function backToList(){
   map.fitBounds(IOWA);
 }
 
-function clearRoute(){ drawToken++; if(layer){ map.removeLayer(layer); layer=null; } }
+function clearRoute(){ drawToken++; if(layer){ map.removeLayer(layer); layer=null; } if(typeof setRouteNames==='function' && routeNames.size) setRouteNames([]); }
 
 function townInfo(name){
   const t=towns[name]; if(!t) return `<b>${name}</b>`;
@@ -374,6 +460,7 @@ function draw(y, interactive){
   if(!all.length){ status(`<span class="err">${y}: no stops have latitude/longitude.</span>`); return; }
   const isLoop = s => String(s['Route Part']||'').trim()==='Loop';
   const main=all.filter(s=>!isLoop(s));
+  setRouteNames(all.map(s=>s['Map Town']));
 
   // Straight dotted placeholder lines; replaced with road lines a moment later
   const mainLine=L.polyline(main.map(ll),{color:'#c0392b',weight:3,opacity:.6,dashArray:'2 6'}).addTo(layer);
