@@ -32,11 +32,12 @@
   .yr small{display:block;font-size:10px;opacity:.85;font-weight:normal}
   .yr:hover{background:#3d6b94}.yr.on{background:#f2b632;color:#000;font-weight:bold}
   #map{flex:1;min-width:0;min-height:0}
-  #panel{width:280px;padding:14px;background:#f7f7f7;overflow-y:auto;border-left:1px solid #ccc;flex:none}
+  #panel{width:300px;padding:14px;background:#f7f7f7;overflow-y:auto;border-left:1px solid #ccc;flex:none}
   #panel .welcome-logo{display:block;width:100%;max-width:240px;margin:4px auto 12px;border-radius:0}
   #panel h2{margin:0 0 4px}#panel img{max-width:100%;margin-top:10px;border-radius:6px}
   #grab{display:none}
   .stat{display:flex;justify-content:space-between;gap:8px;border-bottom:1px solid #ddd;padding:3px 0}
+  .stat > span:last-child{white-space:nowrap;text-align:right}
   .stat.rank{font-weight:bold;color:#1f3b57}
   .dates{font-size:12px;color:#666;margin:-2px 0 8px}
   .daybox{background:#fff6dc;border:1px solid #f2b632;border-radius:6px;padding:6px 8px;margin:6px 0 10px}
@@ -244,6 +245,7 @@ const rideLabel = y => {
 const ranks={}, order={climb:[],dist:[],temp:[]};
 const via={};     // year -> day # -> [[lat,lon],...]: the general route taken from GPX files (route_via.csv)
 const dailyS={};  // year -> day # -> {mi, ft, distSrc, elevSrc} (daily_stats.csv)
+const fixes={};   // year -> day # -> [{after, pt}]: extra points the router must pass through (route_fixes.csv)
 const dailyT={};  // year -> day # -> {mean, high, low, town}, from daily_temps.csv
 
 // Optional soft backdrop files; the page works fine without them
@@ -254,7 +256,8 @@ load('places.csv',true).then(rows=>{
   if(softPlaces.length) baseTiles.setUrl('https://{s}.basemap.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png');  // our own labels replace the map's
   updateSoftPlaces();
 }).catch(()=>{});
-fetch('roads.geojson').then(r=>r.ok?r.json():null).then(g=>{
+fetch('roads.geojson?v=2')   // change the number after an update so browsers fetch the new file
+  .then(r=>r.ok?r.json():null).then(g=>{
   if(!g||!g.features) return;
   softRoadLayers={};
   ['I','U','S'].forEach(c=>{
@@ -264,9 +267,11 @@ fetch('roads.geojson').then(r=>r.ok?r.json():null).then(g=>{
   updateSoftRoads();
 }).catch(()=>{});
 const temps={};   // year -> average temperature (F) at the ending town, from temps.csv
+// Steepness = feet climbed per mile ridden (100 ft/mi is about a 1.9% average grade)
+function steepOf(y){ const m=num(rides[y]['Miles']), f=num(rides[y]['Feet of Climb']); return m>0&&f>0 ? f/m : null; }
 function computeRanks(){
-  const val={climb:y=>num(rides[y]['Feet of Climb']), dist:y=>num(rides[y]['Miles']), temp:y=>temps[y]};
-  ['climb','dist','temp'].forEach(k=>{
+  const val={climb:y=>num(rides[y]['Feet of Climb']), dist:y=>num(rides[y]['Miles']), temp:y=>temps[y], steep:steepOf};
+  ['climb','steep','dist','temp'].forEach(k=>{
     const pool=k==='temp' ? Object.keys(temps) : Object.keys(rides);
     const a=pool.filter(y=>val[k](y)!==null && (k==='temp' || val[k](y)>0))
       .sort((p,q)=>val[k](q)-val[k](p) || p-q);
@@ -279,7 +284,19 @@ function rankText(k, r, hi, lo){
   return r>(N+1)/2 ? `${ordinal(N-r+1)} ${lo}` : `${ordinal(r)} ${hi}`;
 }
 
-Promise.all([load('route_stops.csv'),load('towns.csv'),load('rides.csv'),load('loops.csv',true),load('temps.csv',true),load('daily_temps.csv',true),load('route_via.csv',true),load('daily_stats.csv',true)]).then(([rs,tw,rd,lp,tp,dtp,vp,dsp])=>{
+// The condensed files (rides, days, route_shape) are used when present; otherwise the older separate
+// files (temps, daily_temps, daily_stats, route_via, route_fixes, official_daily) are read instead.
+Promise.all([load('route_stops.csv'),load('towns.csv'),load('rides.csv'),load('loops.csv',true),load('days.csv',true),load('route_shape.csv',true)])
+.then(async base=>{
+  const legacy = (base[4].length||base[5].length) ? [[],[],[],[],[],[]]
+    : await Promise.all(['temps.csv','daily_temps.csv','route_via.csv','daily_stats.csv','route_fixes.csv','official_daily.csv'].map(f=>load(f,true)));
+  return base.concat(legacy);
+}).then(([rs,tw,rd,lp,days,shape,tpL,dtpL,vpL,dspL,fxpL,ofpL])=>{
+  const tp=tpL.concat(rd), dtp=dtpL.concat(days), dsp=dspL.concat(days);
+  const vp=vpL.concat(shape.filter(r=>String(r['Kind']).trim()==='Via'));
+  const fxp=fxpL.concat(shape.filter(r=>String(r['Kind']).trim()==='Fix'));
+  const ofp=ofpL.concat(days.map(r=>({'Year':r['Year'],'Day #':r['Day #'],'Miles':r['Official Miles'],'Feet of Climb':r['Official Feet of Climb'],
+                                      'Loop Miles':r['Loop Miles'],'Loop Feet of Climb':r['Loop Feet of Climb']})));
   if(!('Year' in rs[0]) || !('Map Town' in rs[0]))
     throw new Error(`route_stops.csv headings not recognized. Found: ${Object.keys(rs[0]).join(' | ')}`);
   rs.forEach(r=>{ const y=String(r['Year']).trim(); if(!/^\d{4}$/.test(y)) return; (stops[y]=stops[y]||[]).push(r); });
@@ -299,6 +316,16 @@ Promise.all([load('route_stops.csv'),load('towns.csv'),load('rides.csv'),load('l
   dsp.forEach(r=>{ const y=String(r['Year']).trim(), d=num(r['Day #']); if(d===null) return;
     (dailyS[y]=dailyS[y]||{})[d]={mi:num(r['Distance Miles']), ft:num(r['Elevation Gain Ft']),
       distSrc:String(r['Distance Source']||'').trim(), elevSrc:String(r['Elevation Source']||'').trim()}; });
+  // Figures printed on the official route maps beat anything we estimate
+  ofp.forEach(r=>{ const y=String(r['Year']).trim(), d=num(r['Day #']); if(d===null) return;
+    const e=(dailyS[y]=dailyS[y]||{})[d]=(dailyS[y]||{})[d]||{mi:null,ft:null,distSrc:'',elevSrc:''};
+    const mi=num(r['Miles']), ft=num(r['Feet of Climb']);
+    if(mi>0){ e.mi=mi; e.distSrc='Official'; }
+    if(ft>0){ e.ft=ft; e.elevSrc='Official'; }
+    e.loopMi=num(r['Loop Miles']); e.loopFt=num(r['Loop Feet of Climb']); });
+  fxp.forEach(r=>{ const y=String(r['Year']).trim(), d=num(r['Day #']), la=num(r['Latitude']), lo=num(r['Longitude']);
+    if(d===null||la===null||lo===null) return;
+    ((fixes[y]=fixes[y]||{})[d]=fixes[y][d]||[]).push({after:normName(r['After Town']), pt:[la,lo]}); });
   computeRanks();
   // Most recent year each town appears on a route (main route or loop)
   years.forEach(y=>stops[y].forEach(s=>{ const n=String(s['Map Town']||'').trim(); if(n && hasLL(s)) townLatest[n]=y; }));
@@ -314,7 +341,7 @@ Promise.all([load('route_stops.csv'),load('towns.csv'),load('rides.csv'),load('l
 // Down the left side (across the top on phones). It lists rides in the order chosen with the menu on top.
 // Once a ride is opened it turns into Day 1 ... Day 7 and Full Route.
 let allYears=[], sortMode='year', townFilter='', activeDay=0, introText='';
-const SORTS=[['year','Year – RAGBRAI #'],['climb','Hilliest → Flattest'],['dist','Longest → Shortest'],
+const SORTS=[['year','Year – RAGBRAI #'],['climb','Hilliest → Flattest'],['steep','Steepest → Flattest'],['dist','Longest → Shortest'],
              ['temp','Hottest → Coolest'],['town','City / Town A–Z']];
 const esc = t => String(t).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const fmtN = n => Math.round(n).toLocaleString('en-US');
@@ -358,6 +385,7 @@ function renderList(){
     ys.forEach((y,i)=>{
       let sub='';
       if(sortMode==='climb') sub=`${ordinal(i+1)} · ${fmtN(num(rides[y]['Feet of Climb']))} ft`;
+      else if(sortMode==='steep') sub=`${ordinal(i+1)} · ${steepOf(y).toFixed(1)} ft/mi`;
       else if(sortMode==='dist') sub=`${ordinal(i+1)} · ${fmtN(num(rides[y]['Miles']))} mi`;
       else if(sortMode==='temp') sub=`${ordinal(i+1)} · ${temps[y].toFixed(1)}°F`;
       const el=mkItem(rideLabel(y), sub);
@@ -501,6 +529,13 @@ async function upgradeRoads(y, main, loopLines, mainLine, token){
   }
 }
 
+// Extra points from route_fixes.csv go right after the named town on that day (they steer the router onto the real roads)
+function withFixes(y, d, stopList){
+  const fx=(fixes[y]||{})[d]||[], out=[];
+  stopList.forEach(st=>{ out.push({p:ll(st), d:dayNo(st), fix:false});
+    fx.filter(f=>f.after===normName(st['Map Town'])).forEach(f=>out.push({p:f.pt, d, fix:true})); });
+  return out;
+}
 async function getMain(y, main){
   if(roadCache[y]) return roadCache[y];
   // 1) Route along the general path taken from GPX files (route_via.csv), like every other year
@@ -509,10 +544,11 @@ async function getMain(y, main){
   if(!res) res = await loadGpx(y);
   // 3) Otherwise route between the day's towns
   if(!res){
-    const rr = await getRoadFull(main.map(ll));
-    // Each leg ends at one stop; credit it to that stop's day
+    const rp=[]; main.forEach(st=>{ rp.push(...withFixes(y, dayNo(st), [st])); });   // an extra point belongs to its stop's day
+    const rr = await getRoadFull(rp.map(x=>x.p));
+    // Each leg ends at one point; credit it to that point's day
     const dayMi={};
-    main.forEach((st,i)=>{ if(i>0 && rr.legs[i-1]>0){ const d=dayNo(st); dayMi[d]=(dayMi[d]||0)+rr.legs[i-1]/1609.344; } });
+    rp.forEach((x,i)=>{ if(i>0 && rr.legs[i-1]>0){ dayMi[x.d]=(dayMi[x.d]||0)+rr.legs[i-1]/1609.344; } });
     res = {main: rr.coords, loops:null, dayMi, distSrc:'roads',
       src:'Lines follow today’s roads between towns (approximate, not necessarily the exact RAGBRAI roads).'};
   }
@@ -524,7 +560,7 @@ async function routeViaDays(y){
   const n=numDays(y), lines=[], dayMi={};
   for(let d=1; d<=n; d++){
     let pts=(via[y]||{})[d];
-    if(!(pts && pts.length>1)) pts=dayInfo(y,d).pts.filter(s=>!isLoopStop(s)).map(ll);
+    if(!(pts && pts.length>1)) pts=withFixes(y,d,dayInfo(y,d).pts.filter(s=>!isLoopStop(s))).map(x=>x.p);
     if(pts.length<2) continue;
     const rr=await getRoadFull(pts);
     lines.push(rr.coords);
@@ -579,23 +615,28 @@ async function loadGpx(y){
 
 // The day's distance and elevation gain for the sidebar. Uses daily_stats.csv when it has the day;
 // otherwise the distance is worked out from the route lines once they have loaded.
-const DIST_NOTE={GPX:'Distance measured from a GPS file.',
+const DIST_NOTE={Official:'Distance is from the official route map.', GPX:'Distance measured from a GPS file.',
   Via:'Distance is the road route along the general path of a GPS file.',
   Towns:'Distance is estimated from today’s roads between towns.'};
-const ELEV_NOTE={GPX:'Elevation gain is from a GPS file.',
+const ELEV_NOTE={Official:'Elevation gain is from the official route map.', GPX:'Elevation gain is from a GPS file.',
   DEM:'Elevation gain is estimated from terrain data along the route.'};
 function dayDistHtml(y,n){
   const km=mi=>`${mi.toFixed(1)} mi / ${(mi*1.609344).toFixed(1)} km`;
-  const s=(dailyS[y]||{})[n];
-  if(s && s.mi>0){
-    let h=`<div class="stat rank"><span>Distance</span><span>${s.distSrc==='GPX'?'':'≈ '}${km(s.mi)}</span></div>`;
-    const notes=[DIST_NOTE[s.distSrc]];
+  const s=(dailyS[y]||{})[n], live=((roadCache[y]||{}).dayMi||{})[n];
+  const mi = s && s.mi>0 ? s.mi : (s && s.ft>0 && live>0 ? live : null);
+  if(mi){
+    const exact = v => v==='GPX'||v==='Official';
+    const dSrc = s.mi>0 ? s.distSrc : 'Live';
+    let h=`<div class="stat rank"><span>Distance</span><span>${exact(dSrc)?'':'≈ '}${km(mi)}</span></div>`;
+    const notes=[DIST_NOTE[dSrc]||(dSrc==='Live'?'Distance is estimated from today’s roads.':'')];
     if(s.ft>0){
-      h+=`<div class="stat rank"><span>Elevation Gain</span><span>${s.elevSrc==='GPX'?'':'≈ '}${fmtN(s.ft)} ft / ${fmtN(s.ft*0.3048)} m</span></div>`;
+      const eEx=exact(s.elevSrc), sEx=eEx&&exact(dSrc);
+      h+=`<div class="stat rank"><span>Elevation Gain</span><span>${eEx?'':'≈ '}${fmtN(s.ft)} ft / ${fmtN(s.ft*0.3048)} m</span></div>`;
       notes.push(ELEV_NOTE[s.elevSrc]);
-      h+=`<div class="stat rank"><span>Feet per Mile</span><span>${s.elevSrc==='GPX'?'':'≈ '}${(s.ft/s.mi).toFixed(1)}</span></div>`;
+      h+=`<div class="stat rank"><span>Steepness</span><span>${sEx?'':'≈ '}${(s.ft/mi).toFixed(1)} ft/mi</span></div>`;
     }
-    notes.push('Official figures may differ. Optional loops are not included.');
+    if(s.loopMi>0 && s.loopFt>0) h+=`<div class="stat"><span>With optional loop</span><span>${s.loopMi.toFixed(1)} mi more · ${fmtN(s.loopFt)} ft more</span></div>`;
+    notes.push(exact(dSrc)&&exact(s.elevSrc) ? 'Optional loops are not included above.' : 'Official figures may differ. Optional loops are not included.');
     return h+`<p class="hint">${notes.filter(Boolean).join(' ')}</p>`;
   }
   const r=roadCache[y]; let val, note='';
@@ -646,6 +687,9 @@ function showRide(y){
   const climbTxt = ft>0 ? `${fmt(ft)} ft / ${fmt(ft*0.3048)} m` : '—';
   const distRank = rk.dist ? rankText('dist',rk.dist,'Longest','Shortest') : '—';
   const climbRank = rk.climb ? rankText('climb',rk.climb,'Hilliest','Flattest') : '—';
+  const sp=steepOf(y);
+  const steepTxt = sp!==null ? `${sp.toFixed(1)} ft/mi · ${(sp/52.8).toFixed(1)}% grade` : '—';
+  const steepRank = rk.steep ? rankText('steep',rk.steep,'Steepest','Flattest') : '—';
   const tF=temps[y];
   const tempTxt = tF!==undefined ? `${tF.toFixed(1)}°F / ${((tF-32)*5/9).toFixed(1)}°C` : '—';
   const tempRank = rk.temp ? rankText('temp',rk.temp,'Hottest','Coolest') : '—';
@@ -686,7 +730,16 @@ function showRide(y){
     <div class="stat"><span>Distance</span><span>${distTxt}</span></div>
     <div class="stat rank"><span>Distance Rank</span><span>${distRank}</span></div>
     <div class="stat"><span>Elevation Gain</span><span>${climbTxt}</span></div>
-    <div class="stat rank"><span>Elevation Gain Rank</span><span>${climbRank}</span></div>${tempRows}
+    <div class="stat rank"><span>Elevation Gain Rank</span><span>${climbRank}</span></div>
+    <div class="stat"><span>Steepness</span><span>${steepTxt}</span></div>
+    <div class="stat rank"><span>Steepness Rank</span><span>${steepRank}</span></div>
+    <details class="how"><summary>What is Steepness?</summary>
+      <p>Feet of climbing per mile ridden: the ride's elevation gain divided by its distance. It is
+      the average hilliness of the route, so it lets a short, hilly ride be compared fairly with a
+      long, flat one. 100 ft/mi works out to a 1.9% grade on average. An average hides the real
+      hills, since a long flat stretch can balance a short, steep climb. Rank 1 is the steepest
+      ride; ranks past the halfway point count up from the flattest.</p>
+    </details>${tempRows}
     <div class="stat"><span>Riders</span><span>${f(r['Riders'])}</span></div>
     <div class="stat"><span>Overnight stops</span><span>${f(r['Overnight Stops'])}</span></div>
     <div class="stat"><span>Pass-through towns</span><span>${f(r['Pass-Through Towns'])}</span></div>
