@@ -46,8 +46,8 @@
   #credits{margin-top:18px;padding-top:10px;border-top:2px solid #ccc;font-size:12px;color:#555;line-height:1.4}
   #credits p{margin:4px 0}#credits ul{margin:4px 0;padding-left:18px}#credits a{color:#1f3b57;font-weight:bold}
   .ovLabel{font-size:15px;font-weight:bold;background:#fff;border:2px solid #c0392b}
-  .ptLabel{font-size:9px;padding:0 3px;background:rgba(255,255,255,.85);border:none;box-shadow:none}
-  .lpLabel{font-size:9px;font-style:italic;color:#d35400;padding:0 3px;background:rgba(255,255,255,.85);border:none;box-shadow:none}
+  .ptLabel{font-size:var(--ptfont,9px);padding:0 3px;background:rgba(255,255,255,.85);border:none;box-shadow:none}
+  .lpLabel{font-size:var(--ptfont,9px);font-style:italic;color:#d35400;padding:0 3px;background:rgba(255,255,255,.85);border:none;box-shadow:none}
   .hideSmall .ptLabel,.hideSmall .lpLabel{display:none}
   .hint{color:#666;font-size:13px}.err{color:#b00020;font-weight:bold}
   .reset{background:#fff;border:2px solid rgba(0,0,0,.2);border-radius:4px;padding:5px 8px;cursor:pointer;font-size:13px}
@@ -78,10 +78,11 @@
     <p>This map was built with help from these sites. Please visit them:</p>
     <ul>
       <li><a href="https://ragbrai.com/" target="_blank" rel="noopener">RAGBRAI.com</a> &ndash; the official RAGBRAI site</li>
+      <li><a href="https://www.bikeiowa.com/" target="_blank" rel="noopener">BikeIowa.com</a> &ndash; Iowa&rsquo;s cycling hub since 2001: ride calendar, trails and RAGBRAI info. Big thanks to founder Scott Sumpter, &ldquo;Mr. BikeIowa.&rdquo;</li>
       <li><a href="https://drunkbrian.com/" target="_blank" rel="noopener">DrunkBrian.com</a> &ndash; route archives and rider resources</li>
       <li><a href="https://www.desmoinesregister.com/picture-gallery/life/living-well/ragbrai/2024/12/02/ragbrai-logos/75830282007/" target="_blank" rel="noopener">The Des Moines Register</a> &ndash; the RAGBRAI logo gallery</li>
       <li><a href="https://iowahighwayends.net/ragbraitowns.html" target="_blank" rel="noopener">Iowa Highway Ends</a> &ndash; the RAGBRAI towns list</li>
-      <li><a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo.com</a> &ndash; historical weather data (CC BY 4.0)</li>
+      <li><a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo.com</a> &ndash; historical weather data (CC BY 4.0) and elevation data from the Copernicus DEM. Route elevation gain is estimated from <a href="https://www.opentopodata.org/" target="_blank" rel="noopener">OpenTopoData</a> (SRTM terrain data).</li>
     </ul>
     <p>RAGBRAI names and logos belong to their respective owners.</p>
   </div>
@@ -173,6 +174,8 @@ const rideLabel = y => {
 };
 // Rank 1 = most feet of climb / most miles. Ties are broken by year (earlier first).
 const ranks={}, order={climb:[],dist:[],temp:[]};
+const via={};     // year -> day # -> [[lat,lon],...]: the general route taken from GPX files (route_via.csv)
+const dailyS={};  // year -> day # -> {mi, ft, distSrc, elevSrc} (daily_stats.csv)
 const dailyT={};  // year -> day # -> {mean, high, low, town}, from daily_temps.csv
 const temps={};   // year -> average temperature (F) at the ending town, from temps.csv
 function computeRanks(){
@@ -190,7 +193,7 @@ function rankText(k, r, hi, lo){
   return r>(N+1)/2 ? `${ordinal(N-r+1)} ${lo}` : `${ordinal(r)} ${hi}`;
 }
 
-Promise.all([load('route_stops.csv'),load('towns.csv'),load('rides.csv'),load('loops.csv',true),load('temps.csv',true),load('daily_temps.csv',true)]).then(([rs,tw,rd,lp,tp,dtp])=>{
+Promise.all([load('route_stops.csv'),load('towns.csv'),load('rides.csv'),load('loops.csv',true),load('temps.csv',true),load('daily_temps.csv',true),load('route_via.csv',true),load('daily_stats.csv',true)]).then(([rs,tw,rd,lp,tp,dtp,vp,dsp])=>{
   if(!('Year' in rs[0]) || !('Map Town' in rs[0]))
     throw new Error(`route_stops.csv headings not recognized. Found: ${Object.keys(rs[0]).join(' | ')}`);
   rs.forEach(r=>{ const y=String(r['Year']).trim(); if(!/^\d{4}$/.test(y)) return; (stops[y]=stops[y]||[]).push(r); });
@@ -203,6 +206,13 @@ Promise.all([load('route_stops.csv'),load('towns.csv'),load('rides.csv'),load('l
   tp.forEach(t=>{ const v=num(t['Avg Temp F']); if(v!==null) temps[String(t['Year']).trim()]=v; });
   dtp.forEach(r=>{ const y=String(r['Year']).trim(), d=num(r['Day #']), m=num(r['Mean F']); if(m===null) return;
     (dailyT[y]=dailyT[y]||{})[d]={mean:m, high:num(r['High F']), low:num(r['Low F']), town:String(r['Town']||'').trim()}; });
+  vp.forEach(r=>{ const y=String(r['Year']).trim(), d=num(r['Day #']), q=num(r['Seq']), la=num(r['Latitude']), lo=num(r['Longitude']);
+    if(d===null||q===null||la===null||lo===null) return;
+    via[y]=via[y]||{}; via[y][d]=via[y][d]||[]; via[y][d].push([q,la,lo]); });
+  Object.values(via).forEach(days=>Object.keys(days).forEach(d=>{ days[d]=days[d].sort((a,b)=>a[0]-b[0]).map(p=>[p[1],p[2]]); }));
+  dsp.forEach(r=>{ const y=String(r['Year']).trim(), d=num(r['Day #']); if(d===null) return;
+    (dailyS[y]=dailyS[y]||{})[d]={mi:num(r['Distance Miles']), ft:num(r['Elevation Gain Ft']),
+      distSrc:String(r['Distance Source']||'').trim(), elevSrc:String(r['Elevation Source']||'').trim()}; });
   computeRanks();
   // Most recent year each town appears on a route (main route or loop)
   years.forEach(y=>stops[y].forEach(s=>{ const n=String(s['Map Town']||'').trim(); if(n && hasLL(s)) townLatest[n]=y; }));
@@ -210,6 +220,7 @@ Promise.all([load('route_stops.csv'),load('towns.csv'),load('rides.csv'),load('l
   introText = `Loaded ${years.length} rides, ${Object.keys(towns).length} towns, ${lp.length} loops.<br>` +
     (touch ? 'Tap a ride in the list to open its route, then tap towns for their history. Use the menu above the list to reorder it.'
            : 'Hover over a ride to preview its route. Click one to open it, then pick a day to zoom in or hover over towns for their history. Use the menu above the list to reorder it.');
+  introText += '<br><br>Planning your own ride? Find Iowa events, trails and RAGBRAI info at <a href="https://www.bikeiowa.com/" target="_blank" rel="noopener">BikeIowa.com</a>, thanks to Scott Sumpter.';
   status(introText);
 }).catch(e=>status(`<span class="err">${e.message}</span>`));
 
@@ -257,7 +268,7 @@ function renderList(){
     });
     filterTowns();
   } else {
-    const ys=(sortMode==='year' ? allYears : order[sortMode]).filter(y=>stops[y]);
+    const ys=(sortMode==='year' ? [...allYears].reverse() : order[sortMode]).filter(y=>stops[y]);
     ys.forEach((y,i)=>{
       let sub='';
       if(sortMode==='climb') sub=`${ordinal(i+1)} · ${fmtN(num(rides[y]['Feet of Climb']))} ft`;
@@ -321,23 +332,43 @@ const ll = s => [num(s['Latitude']),num(s['Longitude'])];
 const hasLL = s => num(s['Latitude'])!==null && num(s['Longitude'])!==null;
 const townLL = name => { const t=towns[String(name||'').trim()]; return t && num(t['Latitude'])!==null ? [num(t['Latitude']),num(t['Longitude'])] : null; };
 
+// Pass-through and loop towns get bigger as you zoom in (dot, label and tap target)
+const ptMarkers=[];   // {m: the visible dot, hit: a larger invisible target}
+function ptStyle(){
+  const z=map.getZoom(), k = z>=10?3 : z>=9?2 : z>=8?1 : 0, ph=narrow()?1:0;
+  return {r:[3,4,5,6.5][k]+ph, font:[9,10.5,12,13.5][k]+ph, hit:Math.max([8,9,11,13][k], touch?13:0)};
+}
+function applyPtSize(){
+  const s=ptStyle();
+  map.getContainer().style.setProperty('--ptfont', s.font+'px');
+  ptMarkers.forEach(o=>{ o.m.setRadius(s.r); if(o.hit) o.hit.setRadius(s.hit); });
+}
+map.on('zoomend', applyPtSize);
+
 function addMarker(s, kind, interactive){
   const st={big:{radius:narrow()?7:9,color:'#c0392b',fillColor:'#f2b632',weight:3},
             pt:{radius:3,color:'#1f3b57',fillColor:'#1f3b57',weight:1},
             loop:{radius:3,color:'#e67e22',fillColor:'#e67e22',weight:1}}[kind];
   const m=L.circleMarker(ll(s),{...st,fillOpacity:1}).addTo(layer);
+  // Small towns also get an invisible, larger circle on top so they are easy to hover or tap
+  let target=m, hit=null;
+  if(kind!=='big' && interactive){
+    hit=L.circleMarker(ll(s),{radius:ptStyle().hit,stroke:false,fill:true,fillOpacity:0}).addTo(layer);
+    target=hit;
+  }
+  if(kind!=='big') ptMarkers.push({m,hit});
   const nm=String(s['Map Town']).trim();
-  if(!townMarkers[nm] || kind==='big') townMarkers[nm]=m;
+  if(!townMarkers[nm] || kind==='big') townMarkers[nm]=target;
   m.bindTooltip(s['Map Town'],{permanent:true,direction:kind==='big'?'top':'right',
     className:kind==='big'?'ovLabel':kind==='loop'?'lpLabel':'ptLabel',offset:kind==='big'?[0,-8]:[4,0]});
   if(interactive){
-    m.bindPopup(townInfo(s['Map Town']));   // tap/click opens it
-    if(!touch){ m.on('mouseover',()=>m.openPopup()); m.on('mouseout',()=>m.closePopup()); }
+    target.bindPopup(townInfo(s['Map Town']));   // tap/click opens it
+    if(!touch){ target.on('mouseover',()=>target.openPopup()); target.on('mouseout',()=>target.closePopup()); }
   }
 }
 
 function draw(y, interactive){
-  clearRoute(); roadMsg=''; layer=L.layerGroup().addTo(map); townMarkers={};
+  clearRoute(); roadMsg=''; layer=L.layerGroup().addTo(map); townMarkers={}; ptMarkers.length=0;
   const token=drawToken;
   const all=stops[y].filter(hasLL);
   if(!all.length){ status(`<span class="err">${y}: no stops have latitude/longitude.</span>`); return; }
@@ -356,6 +387,7 @@ function draw(y, interactive){
 
   main.forEach(s=>addMarker(s, s['Stop Type']!=='Pass-through'?'big':'pt', interactive));
   all.filter(isLoop).forEach(s=>addMarker(s,'loop',interactive));
+  applyPtSize();
   labelDensity();
   showRide(y);
   // Wait briefly so sweeping the mouse across years doesn't flood the road service
@@ -384,7 +416,11 @@ async function upgradeRoads(y, main, loopLines, mainLine, token){
 
 async function getMain(y, main){
   if(roadCache[y]) return roadCache[y];
-  let res = await loadGpx(y);
+  // 1) Route along the general path taken from GPX files (route_via.csv), like every other year
+  let res = via[y] ? await routeViaDays(y) : null;
+  // 2) Until route_via.csv has been built: draw a GPS file directly, if there is one
+  if(!res) res = await loadGpx(y);
+  // 3) Otherwise route between the day's towns
   if(!res){
     const rr = await getRoadFull(main.map(ll));
     // Each leg ends at one stop; credit it to that stop's day
@@ -394,6 +430,21 @@ async function getMain(y, main){
       src:'Lines follow today’s roads between towns (approximate, not necessarily the exact RAGBRAI roads).'};
   }
   return roadCache[y]=res;
+}
+
+// One router request per day, through that day's waypoints (days without any use their towns)
+async function routeViaDays(y){
+  const n=numDays(y), lines=[], dayMi={};
+  for(let d=1; d<=n; d++){
+    let pts=(via[y]||{})[d];
+    if(!(pts && pts.length>1)) pts=dayInfo(y,d).pts.filter(s=>!isLoopStop(s)).map(ll);
+    if(pts.length<2) continue;
+    const rr=await getRoadFull(pts);
+    lines.push(rr.coords);
+    dayMi[d]=rr.legs.reduce((a,b)=>a+b,0)/1609.344;
+  }
+  return lines.length ? {main:lines, loops:null, dayMi, distSrc:'via',
+    src:'Lines follow today’s roads along the general route of each day’s GPS file.'} : null;
 }
 
 // Ask the bike router for roads through a list of points (in chunks of 25). Returns the line and each leg's length in metres
@@ -439,16 +490,35 @@ async function loadGpx(y){
   return main.length ? {main, loops:lp, dayMi, distSrc:'gps', src:'Lines follow a GPS route file.'} : null;
 }
 
-// The day's distance for the sidebar (filled in once the route lines have loaded)
+// The day's distance and elevation gain for the sidebar. Uses daily_stats.csv when it has the day;
+// otherwise the distance is worked out from the route lines once they have loaded.
+const DIST_NOTE={GPX:'Distance measured from a GPS file.',
+  Via:'Distance is the road route along the general path of a GPS file.',
+  Towns:'Distance is estimated from today’s roads between towns.'};
+const ELEV_NOTE={GPX:'Elevation gain is from a GPS file.',
+  DEM:'Elevation gain is estimated from terrain data along the route.'};
 function dayDistHtml(y,n){
+  const km=mi=>`${mi.toFixed(1)} mi / ${(mi*1.609344).toFixed(1)} km`;
+  const s=(dailyS[y]||{})[n];
+  if(s && s.mi>0){
+    let h=`<div class="stat rank"><span>Distance</span><span>${s.distSrc==='GPX'?'':'≈ '}${km(s.mi)}</span></div>`;
+    const notes=[DIST_NOTE[s.distSrc]];
+    if(s.ft>0){
+      h+=`<div class="stat rank"><span>Elevation Gain</span><span>${s.elevSrc==='GPX'?'':'≈ '}${fmtN(s.ft)} ft / ${fmtN(s.ft*0.3048)} m</span></div>`;
+      notes.push(ELEV_NOTE[s.elevSrc]);
+    }
+    notes.push('Official figures may differ. Optional loops are not included.');
+    return h+`<p class="hint">${notes.filter(Boolean).join(' ')}</p>`;
+  }
   const r=roadCache[y]; let val, note='';
   if(r){
     const mi=(r.dayMi||{})[n];
     if(mi>0){
-      const est=r.distSrc==='roads';
-      val=`${est?'≈ ':''}${mi.toFixed(1)} mi / ${(mi*1.609344).toFixed(1)} km`;
-      note = est ? 'Estimated from today’s roads between towns; the actual route and official mileage may differ.'
-                 : 'Measured from the GPS route file. Optional loops are not included.';
+      const est=r.distSrc!=='gps';
+      val=`${est?'≈ ':''}${km(mi)}`;
+      note = r.distSrc==='gps' ? 'Measured from a GPS file. Optional loops are not included.'
+           : r.distSrc==='via' ? 'Estimated from roads along the general path of a GPS file; official mileage may differ.'
+           : 'Estimated from today’s roads between towns; the actual route and official mileage may differ.';
     } else val='—';
   } else val = roadFail[y] ? 'unavailable' : 'calculating…';
   return `<div class="stat rank"><span>Distance</span><span>${val}</span></div>` + (note?`<p class="hint">${note}</p>`:'');
