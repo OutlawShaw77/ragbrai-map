@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Contact – Maps of RAGBRAI</title>
+<meta name="description" content="Send a message to Jason Shaw, who builds Maps of RAGBRAI.">
+<link rel="canonical" href="https://mapsofragbrai.com/contact.html">
+<link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<style>
+  :root{--navy:#1f3b57;--line:#c9d3de;--bg:#f4f6f8}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:Segoe UI,Arial,sans-serif;background:var(--bg);color:#222;line-height:1.5}
+  header{background:var(--navy);color:#fff;padding:12px 16px}
+  header a{color:#fff;text-decoration:none;font-weight:bold}
+  main{max-width:560px;margin:20px auto;padding:0 16px 40px}
+  h1{font-size:22px;color:var(--navy);margin:0 0 6px}
+  p.lead{margin:0 0 16px;color:#444}
+  form{background:#fff;border:1px solid var(--line);border-radius:8px;padding:16px}
+  label{display:block;font-weight:bold;font-size:14px;margin:12px 0 4px;color:var(--navy)}
+  label:first-of-type{margin-top:0}
+  input,textarea{width:100%;font:inherit;padding:9px;border:1px solid #9fb3c8;border-radius:6px;background:#fff}
+  input:focus,textarea:focus{outline:2px solid #6c9bd1;outline-offset:1px}
+  textarea{min-height:140px;resize:vertical}
+  .hint{font-size:12px;color:#666;margin:3px 0 0}
+  .hp{position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden}
+  .h-captcha{margin:16px 0 4px}
+  button{margin-top:12px;background:var(--navy);color:#fff;border:0;border-radius:6px;padding:10px 18px;font:inherit;font-weight:bold;cursor:pointer}
+  button[disabled]{opacity:.55;cursor:default}
+  #msg{margin-top:14px;padding:10px 12px;border-radius:6px;display:none;font-size:14px}
+  #msg.ok{display:block;background:#e6f4ea;border:1px solid #9ccfa9;color:#1e5c2f}
+  #msg.err{display:block;background:#fdecea;border:1px solid #f0a8a0;color:#8a1f14}
+  .err-field{border-color:#c0392b !important}
+</style>
+</head>
+<body>
+<header><a href="index.html">&larr; Maps of RAGBRAI</a></header>
+<main>
+  <h1>Contact me</h1>
+  <p class="lead">Questions, corrections or a route I got wrong? Send me a note. I read every message.</p>
+
+  <form id="f" novalidate>
+    <!-- Your free access key from web3forms.com (see the setup notes). It is safe to leave in a public page. -->
+    <input type="hidden" name="access_key" value="8261030d-edc6-4b06-ae1c-87645c2b7b5d">
+    <input type="hidden" name="subject" value="Message from mapsofragbrai.com">
+    <input type="hidden" name="from_name" value="Maps of RAGBRAI contact page">
+    <!-- Hidden trap for bots: people never see or fill this -->
+    <div class="hp" aria-hidden="true"><label>Leave this empty <input type="text" name="website" tabindex="-1" autocomplete="off"></label></div>
+
+    <label for="name">Your name</label>
+    <input id="name" name="name" type="text" autocomplete="name" maxlength="80" required>
+
+    <label for="email">Your email</label>
+    <input id="email" name="email" type="email" autocomplete="email" maxlength="120" required>
+    <label for="email2">Type your email again</label>
+    <input id="email2" type="email" autocomplete="off" maxlength="120" required>
+    <p class="hint">So I can reply. Typing it twice catches typos. I will never share it.</p>
+
+    <label for="message">Message</label>
+    <textarea id="message" name="message" maxlength="3000" required></textarea>
+
+    <!-- Robot check (free hCaptcha provided through Web3Forms) -->
+    <div class="h-captcha" data-captcha="true"></div>
+
+    <button id="send" type="submit">Send message</button>
+    <div id="msg" role="status" aria-live="polite"></div>
+  </form>
+</main>
+<script src="https://web3forms.com/client/script.js" async defer></script>
+<script>
+const f=document.getElementById('f'), msg=document.getElementById('msg'), btn=document.getElementById('send');
+const show=(cls,t)=>{ msg.className=cls; msg.textContent=t; };
+const bad=(el)=>{ el.classList.add('err-field'); el.focus(); };
+// Throwaway-email domains are turned away: a reply to them would never be read
+const DISPOSABLE=['mailinator.com','guerrillamail.com','10minutemail.com','tempmail.com','temp-mail.org','yopmail.com','trashmail.com','sharklasers.com','getnada.com','throwawaymail.com','dispostable.com','maildrop.cc','fakeinbox.com'];
+const EMAIL=/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+const COOLDOWN_MS=60000;
+
+f.addEventListener('input',e=>e.target.classList&&e.target.classList.remove('err-field'));
+f.addEventListener('submit',async ev=>{
+  ev.preventDefault(); show('', ''); msg.style.display='none';
+  const d=Object.fromEntries(new FormData(f));
+  if(d.website) return;                                   // a bot filled the hidden field: quietly ignore
+  const name=f.name, email=f.email, email2=document.getElementById('email2'), message=f.message;
+  if(!d.name.trim()) return show('err','Please enter your name.'), bad(name);
+  if(!EMAIL.test(d.email.trim())) return show('err','That email address does not look right.'), bad(email);
+  if(DISPOSABLE.includes(d.email.trim().toLowerCase().split('@')[1])) return show('err','Please use an email address I can reply to (temporary addresses are not accepted).'), bad(email);
+  if(d.email.trim().toLowerCase()!==email2.value.trim().toLowerCase()) return show('err','The two email addresses do not match.'), bad(email2);
+  if(d.message.trim().length<5) return show('err','Please write a message.'), bad(message);
+  if(!d['h-captcha-response']) return show('err','Please tick the box to show you are not a robot.');
+  if(d.access_key==='8261030d-edc6-4b06-ae1c-87645c2b7b5d') return show('err','The contact form is not switched on yet. Please check back soon.');
+  try{ const last=+localStorage.getItem('contactSent')||0; if(Date.now()-last<COOLDOWN_MS) return show('err','Please wait a minute before sending another message.'); }catch(e){}
+  btn.disabled=true; btn.textContent='Sending…';
+  try{
+    const r=await fetch('https://api.web3forms.com/submit',{method:'POST',headers:{'Content-Type':'application/json',Accept:'application/json'},
+      body:JSON.stringify({...d, email:d.email.trim(), name:d.name.trim(), message:d.message.trim()})});
+    const j=await r.json();
+    if(r.ok && j.success){
+      show('ok','Thank you, '+d.name.trim()+'! Your message was sent. I will reply to '+d.email.trim()+'.');
+      try{ localStorage.setItem('contactSent',String(Date.now())); }catch(e){}
+      f.reset(); if(window.hcaptcha) hcaptcha.reset();
+    } else { show('err', (j&&j.message)||'Sorry, your message could not be sent. Please try again.'); if(window.hcaptcha) hcaptcha.reset(); }
+  }catch(e){ show('err','Sorry, the message could not be sent. Check your connection and try again.'); }
+  btn.disabled=false; btn.textContent='Send message';
+});
+</script>
+</body>
+</html>
