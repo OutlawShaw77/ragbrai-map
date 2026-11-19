@@ -497,7 +497,7 @@ function draw(y, interactive){
     const path=[townLL(l['Leaves Route At']), ...lt.map(ll), townLL(l['Rejoins Route At'])].filter(Boolean);
     const line=L.polyline(path,{color:'#e67e22',weight:3,dashArray:'6 6',opacity:.9})
       .bindTooltip(`${l['Loop Type']} (Day ${l['Day #']})`,{sticky:true}).addTo(layer);
-    return {line,path};
+    return {line,path,day:l['Day #']};
   }).filter(o=>o.path.length>1);
 
   main.forEach(s=>addMarker(s, s['Stop Type']!=='Pass-through'?'big':'pt', interactive));
@@ -507,6 +507,55 @@ function draw(y, interactive){
   showRide(y);
   // Wait briefly so sweeping the mouse across years doesn't flood the road service
   setTimeout(()=>{ if(token===drawToken) upgradeRoads(y, main, loopLines, mainLine, token); }, roadCache[y] ? 0 : 500);
+}
+
+// ---------- Gravel options (grey) and century loops (orange) from Ride with GPS files, 2023 onward ----------
+// tracks/YEAR-dayN-gravel.gpx  : the gravel option; only the parts that differ from the regular route are drawn
+// tracks/YEAR-dayN-century.gpx : the whole day with the long loop; only the extra loop part is drawn
+const OPTION_MIN_YEAR = 2023, GRAVEL_COLOR = '#7b8490', optCache = {};
+// Parts of a track that stay more than tol metres away from the reference track
+function offTrack(track, ref, tol){
+  const cell=0.0016, grid=new Map(), key=(la,lo)=>Math.floor(la/cell)+','+Math.floor(lo/cell);
+  ref.forEach(p=>{ const k=key(p[0],p[1]); (grid.get(k)||grid.set(k,[]).get(k)).push(p); });
+  const near=p=>{ const a=Math.floor(p[0]/cell), b=Math.floor(p[1]/cell);
+    for(let i=-1;i<=1;i++) for(let j=-1;j<=1;j++){ const c=grid.get((a+i)+','+(b+j)); if(c && c.some(q=>hav(p,q)<=tol)) return true; }
+    return false; };
+  const off=track.map(p=>!near(p)), runs=[]; let cur=null;
+  off.forEach((f,i)=>{ if(f){ if(!cur) cur={s:i,e:i}; cur.e=i; } else if(cur){ runs.push(cur); cur=null; } });
+  if(cur) runs.push(cur);
+  return runs.map(r=>track.slice(Math.max(0,r.s-1), Math.min(track.length, r.e+2)))
+             .filter(seg=>{ let m=0; for(let i=1;i<seg.length;i++) m+=hav(seg[i-1],seg[i]); return m>=250; });
+}
+async function loadOptions(y){
+  if(optCache[y]) return optCache[y];
+  const days=[1,2,3,4,5,6,7], get=(d,k)=>gpxPoints(`tracks/${y}-day${d}${k}.gpx`);
+  const [main,gravel,century]=await Promise.all(['','-gravel','-century'].map(k=>Promise.all(days.map(d=>get(d,k)))));
+  const o={gravel:[], century:[]};
+  days.forEach((d,i)=>{
+    if(gravel[i])  offTrack(gravel[i].full,  main[i]?main[i].full:[], 120).forEach(seg=>o.gravel.push({d,seg}));
+    if(century[i]) offTrack(century[i].full, main[i]?main[i].full:[], 120).forEach(seg=>o.century.push({d,seg}));
+  });
+  return optCache[y]=o;
+}
+async function drawOptions(y, token, loopLines){
+  if(y < OPTION_MIN_YEAR) return;
+  const o=await loadOptions(y); if(token!==drawToken || !layer) return;
+  if(o.gravel.length){
+    o.gravel.forEach(({d,seg})=>{ const ln=L.polyline(seg,{color:GRAVEL_COLOR,weight:3.5,opacity:.9})
+      .bindTooltip(`Gravel option (Day ${d})`,{sticky:true}).addTo(layer); if(ln.bringToBack) ln.bringToBack(); });
+  }
+  if(o.century.length){
+    const days=new Set(o.century.map(c=>c.d));
+    // The GPS file is more exact than the loop drawn from the stops list, so it replaces it
+    loopLines.filter(l=>days.has(+l.day)).forEach(l=>layer.removeLayer(l.line));
+    o.century.forEach(({d,seg})=>L.polyline(seg,{color:'#e67e22',weight:3,dashArray:'6 6',opacity:.9})
+      .bindTooltip(`Century loop (Day ${d})`,{sticky:true}).addTo(layer));
+  }
+  if(o.gravel.length||o.century.length){
+    const extra=[o.gravel.length?`<span style="color:${GRAVEL_COLOR};font-weight:bold">Grey</span> = gravel option`:'',
+                 o.century.length?'<span style="color:#e67e22;font-weight:bold">Orange dashes</span> = century loop':''].filter(Boolean).join(' · ');
+    roadNote((roadMsg||'') + '<br>' + extra);
+  }
 }
 
 async function upgradeRoads(y, main, loopLines, mainLine, token){
@@ -523,6 +572,7 @@ async function upgradeRoads(y, main, loopLines, mainLine, token){
     }
     roadNote(r.src);
     updateDayDist(y);
+    drawOptions(y, token, loopLines).catch(()=>{});
   }catch(e){
     roadFail[y]=true; updateDayDist(y);
     if(token===drawToken) roadNote('Road lines unavailable right now – showing straight lines between towns.');
@@ -600,7 +650,7 @@ async function gpxPoints(url){
     const a=pts.map(p=>[+p.getAttribute('lat'),+p.getAttribute('lon')]);
     if(!a.length) return null;
     let m=0; for(let i=1;i<a.length;i++) m+=hav(a[i-1],a[i]);
-    return {pts: a.filter((_,i)=>i%4===0||i===a.length-1), mi: m/1609.344};
+    return {pts: a.filter((_,i)=>i%4===0||i===a.length-1), mi: m/1609.344, full:a};
   }catch(e){ return null; }
 }
 async function loadGpx(y){
