@@ -95,7 +95,7 @@
     <p>RAGBRAI names and logos belong to their respective owners.</p>
     <div id="about">
       <b>About me</b>
-      <p>My name is Jason Shaw and I live in Decorah, IA. I&rsquo;m a stats nerd and this page is a fun hobby of mine. I hope you enjoy it. I&rsquo;ll be riding with Central Iowa Charters. </p>
+      <p>My name is Jason Shaw and I live in Decorah, IA. I&rsquo;m a stats nerd and this page is a fun hobby of mine. I hope you enjoy it.</p>
       <p><a href="contact.html">Contact me</a></p>
     </div>
   </div>
@@ -518,7 +518,7 @@ function draw(y, interactive){
 // ---------- Gravel options (grey) and century loops (orange) from Ride with GPS files, 2023 onward ----------
 // tracks/YEAR-dayN-gravel.gpx  : the gravel option; only the parts that differ from the regular route are drawn
 // tracks/YEAR-dayN-century.gpx : the whole day with the long loop; only the extra loop part is drawn
-const OPTION_MIN_YEAR = 2023, GRAVEL_COLOR = '#7b8490', optCache = {};
+const OPTION_MIN_YEAR = 2014, GRAVEL_COLOR = '#7b8490', optCache = {};
 // Parts of a track that stay more than tol metres away from the reference track
 function offTrack(track, ref, tol){
   const cell=0.0016, grid=new Map(), key=(la,lo)=>Math.floor(la/cell)+','+Math.floor(lo/cell);
